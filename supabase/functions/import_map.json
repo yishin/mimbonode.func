@@ -1,0 +1,7 @@
+{
+  "imports": {
+    "hdkey": "npm:hdkey@1.1.0",
+    "bip39": "https://esm.sh/bip39@3.0.4",
+    "web3": "https://esm.sh/web3@1.10.0"
+  }
+}

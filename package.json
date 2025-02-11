@@ -1,0 +1,16 @@
+{
+  "name": "mimbonode.func",
+  "version": "1.0.0",
+  "main": "supabase/functions/create-wallet/index.js",
+  "author": "Chuck Shin <yishin71@gmail.com>",
+  "license": "ISC",
+  "private": true,
+  "scripts": {
+    "dev": "supabase functions serve --env-file .env.local --inspect-mode brk .",
+    "deploy:development": "./deploy.sh development",
+    "deploy:production": "./deploy.sh production"
+  },
+  "dependencies": {
+    "hdkey": "^2.1.0"
+  }
+}
