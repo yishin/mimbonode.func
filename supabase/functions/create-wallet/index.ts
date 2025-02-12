@@ -197,7 +197,6 @@ Deno.serve(async (req) => {
             headers,
           });
         }
-        console.log("111");
         // 지갑이 이미 존재하는 경우
         if (wallet.address && wallet.private_key) {
           return new Response(
@@ -209,7 +208,6 @@ Deno.serve(async (req) => {
           );
         }
 
-        console.log("222");
         // user_id가 일치하는지 검증
         if (!wallet || !wallet.user_id || wallet.user_id !== user_id) {
           return new Response(
