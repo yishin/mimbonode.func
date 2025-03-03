@@ -6,7 +6,8 @@
   "license": "ISC",
   "private": true,
   "scripts": {
-    "dev": "supabase functions serve --env-file .env.local --inspect-mode brk .",
+    "dev": "supabase functions serve --env-file=.env.local --inspect-mode brk .",
+    "dev:no-verify-jwt": "supabase functions serve --env-file=.env.local --no-verify-jwt --inspect-mode brk .",
     "deploy:development": "./deploy.sh development",
     "deploy:production": "./deploy.sh production"
   },
