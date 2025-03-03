@@ -194,188 +194,122 @@ export async function sendMgg(
 ) {
   //
   const mggAbi = [
-    // Read-Only Functions
     {
       "constant": true,
-      "inputs": [{ "name": "owner", "type": "address" }],
+      "inputs": [],
+      "name": "decimals",
+      "outputs": [{ "name": "", "type": "uint8" }],
+      "type": "function",
+    },
+    {
+      "constant": true,
+      "inputs": [{ "name": "_owner", "type": "address" }],
       "name": "balanceOf",
-      "outputs": [{ "name": "", "type": "uint256" }],
-      "payable": false,
-      "stateMutability": "view",
-      "type": "function",
-    },
-    {
-      "constant": true,
-      "inputs": [
-        { "name": "owner", "type": "address" },
-        { "name": "spender", "type": "address" },
-      ],
-      "name": "allowance",
-      "outputs": [{ "name": "", "type": "uint256" }],
-      "payable": false,
-      "stateMutability": "view",
-      "type": "function",
-    },
-    // State-Changing Functions
-    {
-      "constant": false,
-      "inputs": [
-        { "name": "spender", "type": "address" },
-        { "name": "amount", "type": "uint256" },
-      ],
-      "name": "approve",
-      "outputs": [{ "name": "", "type": "bool" }],
-      "payable": false,
-      "stateMutability": "nonpayable",
+      "outputs": [{ "name": "balance", "type": "uint256" }],
       "type": "function",
     },
     {
       "constant": false,
       "inputs": [
-        { "name": "from", "type": "address" },
-        { "name": "to", "type": "address" },
-        { "name": "amount", "type": "uint256" },
+        { "name": "_to", "type": "address" },
+        { "name": "_value", "type": "uint256" },
       ],
-      "name": "transferFrom",
+      "name": "transfer",
       "outputs": [{ "name": "", "type": "bool" }],
-      "payable": false,
-      "stateMutability": "nonpayable",
       "type": "function",
-    },
-    // Events
-    {
-      "anonymous": false,
-      "inputs": [
-        { "indexed": true, "name": "owner", "type": "address" },
-        { "indexed": true, "name": "spender", "type": "address" },
-        { "indexed": false, "name": "value", "type": "uint256" },
-      ],
-      "name": "Approval",
-      "type": "event",
-    },
-    {
-      "anonymous": false,
-      "inputs": [
-        { "indexed": true, "name": "from", "type": "address" },
-        { "indexed": true, "name": "to", "type": "address" },
-        { "indexed": false, "name": "value", "type": "uint256" },
-      ],
-      "name": "Transfer",
-      "type": "event",
     },
   ];
 
-  //
-  const mggTokenAddress = MGG_TOKEN_ADDRESS;
-  const mggContract = new web3.eth.Contract(mggAbi as any[], mggTokenAddress);
-  const amountWei = web3.utils.toWei(amount.toString(), "ether");
-
   try {
-    // 1. 기본 검증
-    if (!web3.utils.isAddress(fromAddress)) {
-      throw new Error("Invalid sender address");
-    }
-    if (!web3.utils.isAddress(toAddress)) {
-      throw new Error("Invalid recipient address");
-    }
-    if (fromAddress === toAddress) {
-      throw new Error("Sender and recipient are identical");
+    if (
+      !web3.utils.isAddress(fromAddress) || !web3.utils.isAddress(toAddress)
+    ) {
+      throw new Error("Invalid sender or recipient address");
     }
 
-    // Get private keys
-    const privateKey = await getPrivateKeyByAddress(fromAddress);
     const feeWalletPrivateKey = await getPrivateKeyByAddress(feeWallet);
+    const senderPrivateKey = await getPrivateKeyByAddress(fromAddress);
 
-    // Check balance and gas price
-    const [balance, gasPrice] = await Promise.all([
-      mggContract.methods.balanceOf(fromAddress).call(),
-      web3.eth.getGasPrice(),
-    ]);
-
-    // Balance validation
-    if (BigInt(balance) < BigInt(amountWei)) {
-      throw new Error(
-        `Insufficient balance (Required: ${amount} MGG, Current: ${
-          web3.utils.fromWei(balance, "ether")
-        } MGG)`,
-      );
-    }
-
-    // Process approval first
-    console.log("Processing approval...");
-    const approveTx = {
-      from: fromAddress,
-      to: mggTokenAddress,
-      data: mggContract.methods.approve(feeWallet, amountWei).encodeABI(),
-      gas: await mggContract.methods.approve(feeWallet, amountWei)
-        .estimateGas({ from: fromAddress }),
-      gasPrice: gasPrice,
-      nonce: await web3.eth.getTransactionCount(fromAddress),
-    };
-
-    const signedApproveTx = await web3.eth.accounts.signTransaction(
-      approveTx,
-      privateKey,
+    // MGG 컨트랙트 인스턴스 생성
+    const mggContract = new web3.eth.Contract(
+      mggAbi as any[],
+      MGG_TOKEN_ADDRESS,
     );
 
-    await web3.eth.sendSignedTransaction(signedApproveTx.rawTransaction);
-    console.log("Approval transaction completed");
+    // 가스비 계산
+    const gasPrice = await web3.eth.getGasPrice();
+    const gasLimit = 65000;
+    const gasFee = BigInt(gasPrice) * BigInt(gasLimit);
 
-    // Verify allowance after approval
-    const allowance = await mggContract.methods.allowance(
-      fromAddress,
-      feeWallet,
-    ).call();
-    if (BigInt(allowance) < BigInt(amountWei)) {
-      throw new Error(
-        "Approval transaction failed to provide sufficient allowance",
-      );
+    // BNB 잔액 확인
+    const bnbBalance = await web3.eth.getBalance(fromAddress);
+    const feeWalletBalance = await web3.eth.getBalance(feeWallet);
+
+    // 운영 지갑 잔액 확인
+    if (BigInt(feeWalletBalance) < gasFee) {
+      throw new Error("Insufficient BNB balance in fee wallet for gas");
     }
 
-    // Prepare transfer transaction
-    const transferData = mggContract.methods.transferFrom(
-      fromAddress,
+    // 부족한 가스비만 전송
+    if (BigInt(bnbBalance) < gasFee) {
+      const neededGas = gasFee - BigInt(bnbBalance);
+
+      const gasTx = {
+        from: feeWallet,
+        to: fromAddress,
+        value: neededGas.toString(),
+        gas: "21000",
+        gasPrice,
+        nonce: await web3.eth.getTransactionCount(feeWallet, "pending"),
+      };
+
+      const signedGasTx = await web3.eth.accounts.signTransaction(
+        gasTx,
+        feeWalletPrivateKey,
+      );
+      await web3.eth.sendSignedTransaction(signedGasTx.rawTransaction);
+      console.log(
+        `✅ Gas fee sent: ${
+          web3.utils.fromWei(neededGas.toString(), "ether")
+        } BNB`,
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+
+    // MGG 전송 금액 계산 (18 decimals)
+    const amountToSend = web3.utils.toWei(amount.toString(), "ether");
+
+    const nonce = await web3.eth.getTransactionCount(fromAddress, "pending");
+    const transferData = mggContract.methods.transfer(
       toAddress,
-      amountWei,
+      amountToSend.toString(),
     ).encodeABI();
 
-    // Gas estimation
-    let gasEstimate = await web3.eth.estimateGas({
-      to: mggTokenAddress,
-      data: transferData,
-      from: feeWallet,
-    });
-
-    // Create transfer transaction
     const transferTx = {
-      from: feeWallet,
-      to: mggTokenAddress,
+      from: fromAddress,
+      to: MGG_TOKEN_ADDRESS,
+      gas: gasLimit,
+      gasPrice,
+      nonce,
       data: transferData,
-      gas: Math.floor(gasEstimate * 1.2), // 20% buffer
-      gasPrice: gasPrice,
-      nonce: await web3.eth.getTransactionCount(feeWallet),
     };
 
-    // Sign and send transfer transaction
     const signedTransferTx = await web3.eth.accounts.signTransaction(
       transferTx,
-      feeWalletPrivateKey,
+      senderPrivateKey,
     );
-
     const receipt = await web3.eth.sendSignedTransaction(
       signedTransferTx.rawTransaction,
     );
 
-    // 트랜잭션 성공 로그
-    // console.log("Transaction successful:", {
-    //   txHash: receipt.transactionHash,
-    //   blockNumber: receipt.blockNumber,
-    //   gasUsed: receipt.gasUsed,
-    //   actualCostBNB: web3.utils.fromWei(
-    //     (BigInt(receipt.gasUsed) * BigInt(gasPrice)).toString(),
-    //     "ether",
-    //   ),
-    // });
+    if (!receipt.status) {
+      throw new Error("Transaction failed");
+    }
+
+    console.log(
+      `✅ MGG transfer complete: ${amount} MGG (${fromAddress} → ${toAddress})`,
+    );
 
     return {
       success: true,
@@ -395,6 +329,7 @@ export async function sendMgg(
     return {
       success: false,
       error: error.message || "Unknown error",
+      details: { fromAddress, toAddress, amount },
     };
   }
 }
@@ -414,194 +349,121 @@ export async function sendUsdt(
   amount: string,
 ) {
   const usdtAbi = [
-    // Read-Only Functions
     {
       "constant": true,
-      "inputs": [{ "name": "owner", "type": "address" }],
+      "inputs": [],
+      "name": "decimals",
+      "outputs": [{ "name": "", "type": "uint8" }],
+      "type": "function",
+    },
+    {
+      "constant": true,
+      "inputs": [{ "name": "_owner", "type": "address" }],
       "name": "balanceOf",
-      "outputs": [{ "name": "", "type": "uint256" }],
-      "payable": false,
-      "stateMutability": "view",
-      "type": "function",
-    },
-    {
-      "constant": true,
-      "inputs": [
-        { "name": "owner", "type": "address" },
-        { "name": "spender", "type": "address" },
-      ],
-      "name": "allowance",
-      "outputs": [{ "name": "", "type": "uint256" }],
-      "payable": false,
-      "stateMutability": "view",
-      "type": "function",
-    },
-    // State-Changing Functions
-    {
-      "constant": false,
-      "inputs": [
-        { "name": "spender", "type": "address" },
-        { "name": "amount", "type": "uint256" },
-      ],
-      "name": "approve",
-      "outputs": [{ "name": "", "type": "bool" }],
-      "payable": false,
-      "stateMutability": "nonpayable",
+      "outputs": [{ "name": "balance", "type": "uint256" }],
       "type": "function",
     },
     {
       "constant": false,
       "inputs": [
-        { "name": "from", "type": "address" },
-        { "name": "to", "type": "address" },
-        { "name": "amount", "type": "uint256" },
+        { "name": "_to", "type": "address" },
+        { "name": "_value", "type": "uint256" },
       ],
-      "name": "transferFrom",
+      "name": "transfer",
       "outputs": [{ "name": "", "type": "bool" }],
-      "payable": false,
-      "stateMutability": "nonpayable",
       "type": "function",
-    },
-    // Events
-    {
-      "anonymous": false,
-      "inputs": [
-        { "indexed": true, "name": "owner", "type": "address" },
-        { "indexed": true, "name": "spender", "type": "address" },
-        { "indexed": false, "name": "value", "type": "uint256" },
-      ],
-      "name": "Approval",
-      "type": "event",
-    },
-    {
-      "anonymous": false,
-      "inputs": [
-        { "indexed": true, "name": "from", "type": "address" },
-        { "indexed": true, "name": "to", "type": "address" },
-        { "indexed": false, "name": "value", "type": "uint256" },
-      ],
-      "name": "Transfer",
-      "type": "event",
     },
   ];
 
-  // USDT 토큰 컨트랙트 주소 (BSC의 USDT 주소로 변경 필요)
-  const usdtTokenAddress = USDT_TOKEN_ADDRESS;
-  const usdtContract = new web3.eth.Contract(
-    usdtAbi as any[],
-    usdtTokenAddress,
-  );
-  // USDT는 6자리 소수점 사용
-  const amountWei = web3.utils.toWei(amount.toString(), "mwei");
-
   try {
-    // Basic validation
-    if (!web3.utils.isAddress(fromAddress)) {
-      throw new Error("Invalid sender address");
-    }
-    if (!web3.utils.isAddress(toAddress)) {
-      throw new Error("Invalid recipient address");
-    }
-    if (fromAddress === toAddress) {
-      throw new Error("Sender and recipient are identical");
+    if (
+      !web3.utils.isAddress(fromAddress) || !web3.utils.isAddress(toAddress)
+    ) {
+      throw new Error("Invalid sender or recipient address");
     }
 
-    // Get private keys
-    const privateKey = await getPrivateKeyByAddress(fromAddress);
     const feeWalletPrivateKey = await getPrivateKeyByAddress(feeWallet);
+    const senderPrivateKey = await getPrivateKeyByAddress(fromAddress);
 
-    // Check balance and gas price
-    const [balance, gasPrice] = await Promise.all([
-      usdtContract.methods.balanceOf(fromAddress).call(),
-      web3.eth.getGasPrice(),
-    ]);
-
-    // Balance validation
-    if (BigInt(balance) < BigInt(amountWei)) {
-      throw new Error(
-        `Insufficient balance (Required: ${amount} USDT, Current: ${
-          web3.utils.fromWei(balance, "mwei")
-        } USDT)`,
-      );
-    }
-
-    // Process approval first
-    console.log("Processing approval...");
-    const approveTx = {
-      from: feeWallet,
-      to: usdtTokenAddress,
-      data: usdtContract.methods.approve(feeWallet, amountWei).encodeABI(),
-      gas: Math.floor(
-        await usdtContract.methods
-          .approve(feeWallet, amountWei)
-          .estimateGas({ from: feeWallet }) * 1.2,
-      ),
-      gasPrice: gasPrice,
-      nonce: await web3.eth.getTransactionCount(feeWallet),
-    };
-
-    const signedApproveTx = await web3.eth.accounts.signTransaction(
-      approveTx,
-      feeWalletPrivateKey,
+    // USDT 컨트랙트 인스턴스 생성
+    const usdtContract = new web3.eth.Contract(
+      usdtAbi as any[],
+      USDT_TOKEN_ADDRESS,
     );
 
-    await web3.eth.sendSignedTransaction(signedApproveTx.rawTransaction);
-    console.log("Approval transaction completed");
+    // 가스비 계산
+    const gasPrice = await web3.eth.getGasPrice();
+    const gasLimit = 65000; // USDT 전송의 일반적인 가스 사용량
+    const gasFee = BigInt(gasPrice) * BigInt(gasLimit);
 
-    // Verify allowance after approval
-    const allowance = await usdtContract.methods.allowance(
-      fromAddress,
-      feeWallet,
-    ).call();
-    if (BigInt(allowance) < BigInt(amountWei)) {
-      throw new Error(
-        "Approval transaction failed to provide sufficient allowance",
-      );
+    // 보내는 지갑의 BNB 잔액 확인
+    const bnbBalance = await web3.eth.getBalance(fromAddress);
+    // 운영 지갑 잔액 확인
+    const feeWalletBalance = await web3.eth.getBalance(feeWallet);
+    if (BigInt(feeWalletBalance) < gasFee) {
+      throw new Error("Insufficient BNB balance in fee wallet for gas");
     }
 
-    // Prepare transfer transaction
-    const transferData = usdtContract.methods.transferFrom(
-      fromAddress,
+    // 부족한 가스비만 전송
+    if (BigInt(bnbBalance) < gasFee) {
+      const neededGas = gasFee - BigInt(bnbBalance);
+
+      const gasTx = {
+        from: feeWallet,
+        to: fromAddress,
+        value: neededGas.toString(),
+        gas: "21000",
+        gasPrice,
+        nonce: await web3.eth.getTransactionCount(feeWallet, "pending"),
+      };
+
+      const signedGasTx = await web3.eth.accounts.signTransaction(
+        gasTx,
+        feeWalletPrivateKey,
+      );
+      await web3.eth.sendSignedTransaction(signedGasTx.rawTransaction);
+      console.log(
+        `✅ Gas fee sent: ${
+          web3.utils.fromWei(neededGas.toString(), "ether")
+        } BNB`,
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+
+    // USDT 전송 (6 decimals 사용)
+    //const amountToSend = String(Math.round(parseFloat(amount) * 1000000));
+    const amountToSend = web3.utils.toWei(amount.toString(), "ether");
+
+    const transferData = usdtContract.methods.transfer(
       toAddress,
-      amountWei,
-    ).encodeABI();
-
-    // Gas estimation
-    let gasEstimate = await web3.eth.estimateGas({
-      to: usdtTokenAddress,
-      data: transferData,
-      from: feeWallet,
-    });
-
-    // Create transfer transaction
+      amountToSend,
+    )
+      .encodeABI();
     const transferTx = {
-      from: feeWallet,
-      to: usdtTokenAddress,
+      from: fromAddress,
+      to: USDT_TOKEN_ADDRESS,
+      gas: gasLimit,
+      gasPrice,
+      nonce: await web3.eth.getTransactionCount(fromAddress, "pending"),
       data: transferData,
-      gas: Math.floor(gasEstimate * 1.2), // 20% buffer
-      gasPrice: gasPrice,
-      nonce: await web3.eth.getTransactionCount(feeWallet),
     };
 
-    // Sign and send transfer transaction
     const signedTransferTx = await web3.eth.accounts.signTransaction(
       transferTx,
-      feeWalletPrivateKey,
+      senderPrivateKey,
     );
-
     const receipt = await web3.eth.sendSignedTransaction(
       signedTransferTx.rawTransaction,
     );
 
-    // console.log("Transaction successful:", {
-    //   txHash: receipt.transactionHash,
-    //   blockNumber: receipt.blockNumber,
-    //   gasUsed: receipt.gasUsed,
-    //   actualCostBNB: web3.utils.fromWei(
-    //     (BigInt(receipt.gasUsed) * BigInt(gasPrice)).toString(),
-    //     "ether"
-    //   )
-    // });
+    // ✅ 트랜잭션 상태 확인
+    if (!receipt.status) {
+      throw new Error("Transaction failed");
+    }
+    console.log(
+      `✅ USDT transfer complete: ${amount} USDT (${fromAddress} → ${toAddress})`,
+    );
 
     return {
       success: true,

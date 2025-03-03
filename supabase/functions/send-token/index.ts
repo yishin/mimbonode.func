@@ -241,8 +241,12 @@ serve(async (req) => {
       .select()
       .single();
 
+    if (insertError) {
+      console.error("Error creating transaction record:", insertError);
+    }
+
     // 전송 성공 회신
-    if (txHash && feeTxHash) {
+    if (txHash) {
       return new Response(
         JSON.stringify({
           success: true,
