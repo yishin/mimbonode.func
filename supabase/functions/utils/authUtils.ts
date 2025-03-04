@@ -25,12 +25,19 @@ export async function authenticateRequest(req: Request) {
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
     .select("*")
-    .eq("email", user.email)
+    .eq("user_id", user.id)
     .single();
 
   if (profileError) {
     return { error: profileError.message, status: 401 };
   }
+
+  // 사용자 지갑 가져오기
+  const { data: wallet, error: walletError } = await supabase
+    .from("wallets")
+    .select("*")
+    .eq("user_id", user.id)
+    .single();
 
   // 모든 정책 가져오기
   const { data: settings, error: settingsError } = await supabase
@@ -47,5 +54,5 @@ export async function authenticateRequest(req: Request) {
     return acc;
   }, {});
 
-  return { user, profile, settings: settingsJson, status: 200 };
+  return { user, profile, wallet, settings: settingsJson, status: 200 };
 }
