@@ -13,11 +13,10 @@ const alchemyUrl = Deno.env.get("ENVIRONMENT") === "production"
 const provider = new Web3.providers.HttpProvider(alchemyUrl);
 const web3 = new Web3(provider);
 
-let feeWallet = "";
-
-// 수수료 지갑 설정
-export function setFeeWallet(wallet: string) {
-  feeWallet = wallet;
+// 수수료를 지급하는 운영용 지갑 설정
+let operationWallet = "";
+export function setOperationWallet(wallet: string) {
+  operationWallet = wallet;
 }
 
 // 지갑의 개인키 가져오기
@@ -45,6 +44,103 @@ async function getPrivateKeyByAddress(address: string) {
   return key;
 }
 
+// 컨트랙트 ABI
+const MGG_ABI = [
+  {
+    "constant": true,
+    "inputs": [],
+    "name": "decimals",
+    "outputs": [{ "name": "", "type": "uint8" }],
+    "type": "function",
+  },
+  {
+    "constant": true,
+    "inputs": [{ "name": "_owner", "type": "address" }],
+    "name": "balanceOf",
+    "outputs": [{ "name": "balance", "type": "uint256" }],
+    "type": "function",
+  },
+  {
+    "constant": false,
+    "inputs": [
+      { "name": "_to", "type": "address" },
+      { "name": "_value", "type": "uint256" },
+    ],
+    "name": "transfer",
+    "outputs": [{ "name": "", "type": "bool" }],
+    "type": "function",
+  },
+];
+
+const USDT_ABI = [
+  {
+    "constant": true,
+    "inputs": [],
+    "name": "decimals",
+    "outputs": [{ "name": "", "type": "uint8" }],
+    "type": "function",
+  },
+  {
+    "constant": true,
+    "inputs": [{ "name": "_owner", "type": "address" }],
+    "name": "balanceOf",
+    "outputs": [{ "name": "balance", "type": "uint256" }],
+    "type": "function",
+  },
+  {
+    "constant": false,
+    "inputs": [
+      { "name": "_to", "type": "address" },
+      { "name": "_value", "type": "uint256" },
+    ],
+    "name": "transfer",
+    "outputs": [{ "name": "", "type": "bool" }],
+    "type": "function",
+  },
+];
+
+/**
+ * BNB 잔액 확인
+ *
+ * @param address - 주소
+ * @returns {Object} 잔액 객체
+ */
+export async function getBnbBalance(address: string) {
+  const balance = await web3.eth.getBalance(address);
+  return balance;
+}
+
+/**
+ * MGG 잔액 확인
+ *
+ * @param address - 주소
+ * @returns {Object} 잔액 객체
+ */
+export async function getMggBalance(address: string) {
+  const mggContract = new web3.eth.Contract(
+    MGG_ABI as any[],
+    MGG_TOKEN_ADDRESS,
+  );
+  const balance = await mggContract.methods.balanceOf(address).call();
+  const balanceFormatted = web3.utils.fromWei(balance.toString(), "ether");
+  return balanceFormatted;
+}
+
+/**
+ * USDT 잔액 확인
+ *
+ * @param address - 주소
+ * @returns {Object} 잔액 객체
+ */
+export async function getUsdtBalance(address: string) {
+  const usdtContract = new web3.eth.Contract(
+    USDT_ABI as any[],
+    USDT_TOKEN_ADDRESS,
+  );
+  const balance = await usdtContract.methods.balanceOf(address).call();
+  const balanceFormatted = web3.utils.fromWei(balance.toString(), "ether");
+  return balanceFormatted;
+}
 /**
  * BNB를 전송하는 함수
  * fromAddress에서는 순수 전송량만 차감되고, 가스비는 운영 지갑에서 지불
@@ -69,7 +165,9 @@ export async function sendBnb(
       throw new Error("Sender and recipient cannot be the same");
     }
 
-    const feeWalletPrivateKey = await getPrivateKeyByAddress(feeWallet); // 운영자 지갑 Private Key
+    const operationWalletPrivateKey = await getPrivateKeyByAddress(
+      operationWallet,
+    ); // 운영자 지갑 Private Key
     const senderPrivateKey = await getPrivateKeyByAddress(fromAddress); // 발신자 지갑 Private Key
     const amountWei = web3.utils.toWei(amount.toString(), "ether");
 
@@ -83,7 +181,7 @@ export async function sendBnb(
       );
     }
 
-    // ✅ Step 1: 운영자 지갑(feeWallet)이 fromAddress에 가스비만 전송
+    // ✅ Step 1: 운영자 지갑(operationWallet)이 fromAddress에 가스비만 전송
     const gasPrice = await web3.eth.getGasPrice();
 
     // 실제 전송에 필요한 가스 추정
@@ -98,7 +196,7 @@ export async function sendBnb(
     // 가스비 전송에 필요한 가스 추정
     const feeTransferGasLimit = Math.floor(
       await web3.eth.estimateGas({
-        from: feeWallet,
+        from: operationWallet,
         to: fromAddress,
         value: "1", // 더미 값
       }) * 1.2,
@@ -108,17 +206,17 @@ export async function sendBnb(
     const gasFeeWei = BigInt(gasPrice) * BigInt(transferGasLimit); // 실제 전송에 필요한 가스비
 
     const tx1 = {
-      from: feeWallet,
+      from: operationWallet,
       to: fromAddress,
       value: gasFeeWei.toString(), // 가스비만 전송
       gas: feeTransferGasLimit, // 추정된 가스 한도 사용
       gasPrice,
-      nonce: await web3.eth.getTransactionCount(feeWallet),
+      nonce: await web3.eth.getTransactionCount(operationWallet),
     };
 
     const signedTx1 = await web3.eth.accounts.signTransaction(
       tx1,
-      feeWalletPrivateKey,
+      operationWalletPrivateKey,
     );
     const receipt1 = await web3.eth.sendSignedTransaction(
       signedTx1.rawTransaction,
@@ -193,33 +291,6 @@ export async function sendMgg(
   amount: string,
 ) {
   //
-  const mggAbi = [
-    {
-      "constant": true,
-      "inputs": [],
-      "name": "decimals",
-      "outputs": [{ "name": "", "type": "uint8" }],
-      "type": "function",
-    },
-    {
-      "constant": true,
-      "inputs": [{ "name": "_owner", "type": "address" }],
-      "name": "balanceOf",
-      "outputs": [{ "name": "balance", "type": "uint256" }],
-      "type": "function",
-    },
-    {
-      "constant": false,
-      "inputs": [
-        { "name": "_to", "type": "address" },
-        { "name": "_value", "type": "uint256" },
-      ],
-      "name": "transfer",
-      "outputs": [{ "name": "", "type": "bool" }],
-      "type": "function",
-    },
-  ];
-
   try {
     if (
       !web3.utils.isAddress(fromAddress) || !web3.utils.isAddress(toAddress)
@@ -227,27 +298,45 @@ export async function sendMgg(
       throw new Error("Invalid sender or recipient address");
     }
 
-    const feeWalletPrivateKey = await getPrivateKeyByAddress(feeWallet);
+    const operationWalletPrivateKey = await getPrivateKeyByAddress(
+      operationWallet,
+    );
     const senderPrivateKey = await getPrivateKeyByAddress(fromAddress);
 
     // MGG 컨트랙트 인스턴스 생성
     const mggContract = new web3.eth.Contract(
-      mggAbi as any[],
+      MGG_ABI as any[],
       MGG_TOKEN_ADDRESS,
     );
 
     // 가스비 계산
     const gasPrice = await web3.eth.getGasPrice();
-    const gasLimit = 65000;
+
+    // 가스 한도 추정 및 20% 버퍼 추가
+    const amountToSend = web3.utils.toWei(amount.toString(), "ether");
+    const transferData = mggContract.methods.transfer(
+      toAddress,
+      amountToSend.toString(),
+    ).encodeABI();
+
+    const estimatedGas = Math.floor(
+      await web3.eth.estimateGas({
+        from: fromAddress,
+        to: MGG_TOKEN_ADDRESS,
+        data: transferData,
+      }) * 1.2,
+    ); // 20% 버퍼 추가
+
+    const gasLimit = estimatedGas;
     const gasFee = BigInt(gasPrice) * BigInt(gasLimit);
 
     // BNB 잔액 확인
     const bnbBalance = await web3.eth.getBalance(fromAddress);
-    const feeWalletBalance = await web3.eth.getBalance(feeWallet);
+    const operationWalletBalance = await web3.eth.getBalance(operationWallet);
 
     // 운영 지갑 잔액 확인
-    if (BigInt(feeWalletBalance) < gasFee) {
-      throw new Error("Insufficient BNB balance in fee wallet for gas");
+    if (BigInt(operationWalletBalance) < gasFee) {
+      throw new Error("Insufficient BNB balance in operation wallet for gas");
     }
 
     // 부족한 가스비만 전송
@@ -255,17 +344,17 @@ export async function sendMgg(
       const neededGas = gasFee - BigInt(bnbBalance);
 
       const gasTx = {
-        from: feeWallet,
+        from: operationWallet,
         to: fromAddress,
         value: neededGas.toString(),
         gas: "21000",
         gasPrice,
-        nonce: await web3.eth.getTransactionCount(feeWallet, "pending"),
+        nonce: await web3.eth.getTransactionCount(operationWallet, "pending"),
       };
 
       const signedGasTx = await web3.eth.accounts.signTransaction(
         gasTx,
-        feeWalletPrivateKey,
+        operationWalletPrivateKey,
       );
       await web3.eth.sendSignedTransaction(signedGasTx.rawTransaction);
       console.log(
@@ -277,15 +366,7 @@ export async function sendMgg(
       await new Promise((resolve) => setTimeout(resolve, 3000));
     }
 
-    // MGG 전송 금액 계산 (18 decimals)
-    const amountToSend = web3.utils.toWei(amount.toString(), "ether");
-
     const nonce = await web3.eth.getTransactionCount(fromAddress, "pending");
-    const transferData = mggContract.methods.transfer(
-      toAddress,
-      amountToSend.toString(),
-    ).encodeABI();
-
     const transferTx = {
       from: fromAddress,
       to: MGG_TOKEN_ADDRESS,
@@ -348,33 +429,6 @@ export async function sendUsdt(
   toAddress: string,
   amount: string,
 ) {
-  const usdtAbi = [
-    {
-      "constant": true,
-      "inputs": [],
-      "name": "decimals",
-      "outputs": [{ "name": "", "type": "uint8" }],
-      "type": "function",
-    },
-    {
-      "constant": true,
-      "inputs": [{ "name": "_owner", "type": "address" }],
-      "name": "balanceOf",
-      "outputs": [{ "name": "balance", "type": "uint256" }],
-      "type": "function",
-    },
-    {
-      "constant": false,
-      "inputs": [
-        { "name": "_to", "type": "address" },
-        { "name": "_value", "type": "uint256" },
-      ],
-      "name": "transfer",
-      "outputs": [{ "name": "", "type": "bool" }],
-      "type": "function",
-    },
-  ];
-
   try {
     if (
       !web3.utils.isAddress(fromAddress) || !web3.utils.isAddress(toAddress)
@@ -382,26 +436,45 @@ export async function sendUsdt(
       throw new Error("Invalid sender or recipient address");
     }
 
-    const feeWalletPrivateKey = await getPrivateKeyByAddress(feeWallet);
+    const operationWalletPrivateKey = await getPrivateKeyByAddress(
+      operationWallet,
+    );
     const senderPrivateKey = await getPrivateKeyByAddress(fromAddress);
 
     // USDT 컨트랙트 인스턴스 생성
     const usdtContract = new web3.eth.Contract(
-      usdtAbi as any[],
+      USDT_ABI as any[],
       USDT_TOKEN_ADDRESS,
     );
 
     // 가스비 계산
     const gasPrice = await web3.eth.getGasPrice();
-    const gasLimit = 65000; // USDT 전송의 일반적인 가스 사용량
+
+    // USDT 전송 (6 decimals 사용)
+    const amountToSend = web3.utils.toWei(amount.toString(), "ether");
+    const transferData = usdtContract.methods.transfer(
+      toAddress,
+      amountToSend,
+    ).encodeABI();
+
+    // 가스 한도 추정 및 20% 버퍼 추가
+    const estimatedGas = Math.floor(
+      await web3.eth.estimateGas({
+        from: fromAddress,
+        to: USDT_TOKEN_ADDRESS,
+        data: transferData,
+      }) * 1.2,
+    ); // 20% 버퍼 추가
+
+    const gasLimit = estimatedGas;
     const gasFee = BigInt(gasPrice) * BigInt(gasLimit);
 
     // 보내는 지갑의 BNB 잔액 확인
     const bnbBalance = await web3.eth.getBalance(fromAddress);
     // 운영 지갑 잔액 확인
-    const feeWalletBalance = await web3.eth.getBalance(feeWallet);
-    if (BigInt(feeWalletBalance) < gasFee) {
-      throw new Error("Insufficient BNB balance in fee wallet for gas");
+    const operationWalletBalance = await web3.eth.getBalance(operationWallet);
+    if (BigInt(operationWalletBalance) < gasFee) {
+      throw new Error("Insufficient BNB balance in operation wallet for gas");
     }
 
     // 부족한 가스비만 전송
@@ -409,17 +482,17 @@ export async function sendUsdt(
       const neededGas = gasFee - BigInt(bnbBalance);
 
       const gasTx = {
-        from: feeWallet,
+        from: operationWallet,
         to: fromAddress,
         value: neededGas.toString(),
         gas: "21000",
         gasPrice,
-        nonce: await web3.eth.getTransactionCount(feeWallet, "pending"),
+        nonce: await web3.eth.getTransactionCount(operationWallet, "pending"),
       };
 
       const signedGasTx = await web3.eth.accounts.signTransaction(
         gasTx,
-        feeWalletPrivateKey,
+        operationWalletPrivateKey,
       );
       await web3.eth.sendSignedTransaction(signedGasTx.rawTransaction);
       console.log(
@@ -431,21 +504,13 @@ export async function sendUsdt(
       await new Promise((resolve) => setTimeout(resolve, 3000));
     }
 
-    // USDT 전송 (6 decimals 사용)
-    //const amountToSend = String(Math.round(parseFloat(amount) * 1000000));
-    const amountToSend = web3.utils.toWei(amount.toString(), "ether");
-
-    const transferData = usdtContract.methods.transfer(
-      toAddress,
-      amountToSend,
-    )
-      .encodeABI();
+    const nonce = await web3.eth.getTransactionCount(fromAddress, "pending");
     const transferTx = {
       from: fromAddress,
       to: USDT_TOKEN_ADDRESS,
       gas: gasLimit,
       gasPrice,
-      nonce: await web3.eth.getTransactionCount(fromAddress, "pending"),
+      nonce,
       data: transferData,
     };
 
