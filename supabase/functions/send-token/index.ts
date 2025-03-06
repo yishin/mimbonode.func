@@ -182,7 +182,7 @@ serve(async (req) => {
     ////////////////////////////////
     // 요청별 처리
     ////////////////////////////////
-    setOperationWallet(settings.wallet_operation);
+    setOperationWallet(settings.wallet_operation); // 수수료를 지급할 지갑 설정
 
     // 주소 확인
     if (!from || !to) {
