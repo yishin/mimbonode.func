@@ -73,11 +73,41 @@ const MGG_ABI = [
 ];
 
 const USDT_ABI = [
+  // ERC-20 표준 함수들
+  {
+    "constant": true,
+    "inputs": [],
+    "name": "name",
+    "outputs": [{ "name": "", "type": "string" }],
+    "payable": false,
+    "stateMutability": "view",
+    "type": "function",
+  },
+  {
+    "constant": true,
+    "inputs": [],
+    "name": "symbol",
+    "outputs": [{ "name": "", "type": "string" }],
+    "payable": false,
+    "stateMutability": "view",
+    "type": "function",
+  },
   {
     "constant": true,
     "inputs": [],
     "name": "decimals",
     "outputs": [{ "name": "", "type": "uint8" }],
+    "payable": false,
+    "stateMutability": "view",
+    "type": "function",
+  },
+  {
+    "constant": true,
+    "inputs": [],
+    "name": "totalSupply",
+    "outputs": [{ "name": "", "type": "uint256" }],
+    "payable": false,
+    "stateMutability": "view",
     "type": "function",
   },
   {
@@ -85,17 +115,78 @@ const USDT_ABI = [
     "inputs": [{ "name": "_owner", "type": "address" }],
     "name": "balanceOf",
     "outputs": [{ "name": "balance", "type": "uint256" }],
+    "payable": false,
+    "stateMutability": "view",
     "type": "function",
   },
   {
     "constant": false,
-    "inputs": [
-      { "name": "_to", "type": "address" },
-      { "name": "_value", "type": "uint256" },
-    ],
+    "inputs": [{ "name": "_to", "type": "address" }, {
+      "name": "_value",
+      "type": "uint256",
+    }],
     "name": "transfer",
     "outputs": [{ "name": "", "type": "bool" }],
+    "payable": false,
+    "stateMutability": "nonpayable",
     "type": "function",
+  },
+  {
+    "constant": false,
+    "inputs": [{ "name": "_from", "type": "address" }, {
+      "name": "_to",
+      "type": "address",
+    }, { "name": "_value", "type": "uint256" }],
+    "name": "transferFrom",
+    "outputs": [{ "name": "", "type": "bool" }],
+    "payable": false,
+    "stateMutability": "nonpayable",
+    "type": "function",
+  },
+  {
+    "constant": false,
+    "inputs": [{ "name": "_spender", "type": "address" }, {
+      "name": "_value",
+      "type": "uint256",
+    }],
+    "name": "approve",
+    "outputs": [{ "name": "", "type": "bool" }],
+    "payable": false,
+    "stateMutability": "nonpayable",
+    "type": "function",
+  },
+  {
+    "constant": true,
+    "inputs": [{ "name": "_owner", "type": "address" }, {
+      "name": "_spender",
+      "type": "address",
+    }],
+    "name": "allowance",
+    "outputs": [{ "name": "", "type": "uint256" }],
+    "payable": false,
+    "stateMutability": "view",
+    "type": "function",
+  },
+  // Transfer 이벤트 (트랜잭션 조회에 필요)
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "name": "from", "type": "address" },
+      { "indexed": true, "name": "to", "type": "address" },
+      { "indexed": false, "name": "value", "type": "uint256" },
+    ],
+    "name": "Transfer",
+    "type": "event",
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "name": "owner", "type": "address" },
+      { "indexed": true, "name": "spender", "type": "address" },
+      { "indexed": false, "name": "value", "type": "uint256" },
+    ],
+    "name": "Approval",
+    "type": "event",
   },
 ];
 
@@ -550,5 +641,102 @@ export async function sendUsdt(
       error: error.message || "Unknown error",
       details: { fromAddress, toAddress, amount },
     };
+  }
+}
+
+/**
+ * 주어진 주소로 받은 마지막 USDT 트랜잭션 해시를 가져옵니다.
+ *
+ * @param address - 조회할 지갑 주소
+ * @returns 마지막으로 받은 USDT 트랜잭션 해시 또는 null
+ */
+export async function getUsdtLastTx(address) {
+  try {
+    if (!web3.utils.isAddress(address)) {
+      throw new Error("Invalid address");
+    }
+
+    // USDT 컨트랙트 인스턴스 생성
+    const usdtContract = new web3.eth.Contract(
+      USDT_ABI,
+      USDT_TOKEN_ADDRESS,
+    );
+
+    // 검색 전략: 여러 블록 범위를 순차적으로 검색
+    const blockRanges = [
+      { fromBlock: "latest", toBlock: "latest", desc: "최신 블록" },
+      { fromBlock: -50000, toBlock: "latest", desc: "최근 50,000 블록" },
+      { fromBlock: -200000, toBlock: -50001, desc: "50,001-200,000 블록 전" },
+      { fromBlock: -500000, toBlock: -200001, desc: "200,001-500,000 블록 전" },
+      {
+        fromBlock: -1000000,
+        toBlock: -500001,
+        desc: "500,001-1,000,000 블록 전",
+      }, // 1백만 = 약 34.8일
+    ];
+
+    for (const range of blockRanges) {
+      console.log(`Searching in ${range.desc}`);
+
+      try {
+        // 상대적 블록 번호를 절대적 블록 번호로 변환
+        let fromBlock = range.fromBlock;
+        let toBlock = range.toBlock;
+
+        const currentBlock = await web3.eth.getBlockNumber();
+
+        if (fromBlock === "latest") {
+          fromBlock = currentBlock;
+        } else if (typeof fromBlock === "number" && fromBlock < 0) {
+          fromBlock = Math.max(0, currentBlock + fromBlock); // 음수 값은 현재 블록에서 뺌
+        }
+
+        if (toBlock === "latest") {
+          toBlock = currentBlock;
+        } else if (typeof toBlock === "number" && toBlock < 0) {
+          toBlock = Math.max(0, currentBlock + toBlock);
+        }
+
+        console.log(`Searching from block ${fromBlock} to ${toBlock}`);
+
+        // 이벤트 필터 생성 (해당 주소가 수신자(to)인 Transfer 이벤트만 조회)
+        const toEvents = await usdtContract.getPastEvents("Transfer", {
+          filter: { to: address },
+          fromBlock,
+          toBlock,
+        });
+
+        if (toEvents.length > 0) {
+          // 블록 번호로 정렬하여 가장 최근 트랜잭션 찾기
+          toEvents.sort((a, b) => b.blockNumber - a.blockNumber);
+
+          // 가장 최근 이벤트의 트랜잭션 해시 반환
+          const find = {
+            txHash: toEvents[0].transactionHash,
+            txAddress: toEvents[0].returnValues.from,
+            txBlock: toEvents[0].blockNumber,
+          };
+          console.log(
+            `Found transaction: ${find.txHash} at block ${
+              toEvents[0].blockNumber
+            }`,
+          );
+          return find;
+        }
+      } catch (rangeError) {
+        console.log(`Error searching in range ${range.desc}:`, rangeError);
+        // 이 범위에서 오류가 발생하면 다음 범위로 계속 진행
+        continue;
+      }
+    }
+
+    // 모든 범위에서 트랜잭션을 찾지 못한 경우
+    console.log(
+      `No USDT transactions found for address: ${address} after searching all ranges`,
+    );
+    return null;
+  } catch (error) {
+    console.error("Error in getUsdtLastTx:", error);
+    return null;
   }
 }
