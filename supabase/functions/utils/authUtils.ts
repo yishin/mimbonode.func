@@ -1,5 +1,24 @@
 import { supabase } from "./supabaseClient.ts";
 
+export async function getSettings() {
+  // 모든 정책 가져오기
+  const { data: settings, error: settingsError } = await supabase
+    .from("settings")
+    .select("key, value");
+
+  if (settingsError) {
+    return { error: settingsError.message, status: 401 };
+  }
+
+  // 읽어온 정책 리스트를 json 형식으로 변환
+  const settingsJson = settings.reduce((acc: any, curr: any) => {
+    acc[curr.key] = curr.value;
+    return acc;
+  }, {});
+
+  return settingsJson;
+}
+
 export async function authenticateRequest(req: Request) {
   const authHeader = req.headers.get("Authorization");
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -39,20 +58,7 @@ export async function authenticateRequest(req: Request) {
     .eq("user_id", user.id)
     .single();
 
-  // 모든 정책 가져오기
-  const { data: settings, error: settingsError } = await supabase
-    .from("settings")
-    .select("key, value");
+  const settings = await getSettings();
 
-  if (settingsError) {
-    return { error: settingsError.message, status: 401 };
-  }
-
-  // 읽어온 정책 리스트를 json 형식으로 변환
-  const settingsJson = settings.reduce((acc: any, curr: any) => {
-    acc[curr.key] = curr.value;
-    return acc;
-  }, {});
-
-  return { user, profile, wallet, settings: settingsJson, status: 200 };
+  return { user, profile, wallet, settings, status: 200 };
 }
