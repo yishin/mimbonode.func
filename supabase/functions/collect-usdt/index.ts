@@ -64,7 +64,7 @@ serve(async (req) => {
     ///////////////////////////////
 
     const type = "DEPOSIT";
-    const from = profile.username;
+    const from = profile.username; // USDT가 입금된 tx를 찾아서 기록해야 함
     const fromToken = "USDT";
     const fromAmount = amount;
     const to = profile.username; // 트랜젝션에 사용자가 받는것으로 기록
@@ -72,6 +72,7 @@ serve(async (req) => {
     const toAmount = 0;
     let txHash = "";
     let txAddress = "";
+
     try {
       // 0. 블럭체인에서 마지막 tx 기록 조회
       const lastTx = await getUsdtLastTx(address);
