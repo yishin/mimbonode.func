@@ -123,6 +123,7 @@ serve(async (req) => {
           package_id: myPackage.id,
           name: myPackage.name,
           amount: minedAmount,
+          user_level: profile.user_level,
           tx_hash: result.txHash,
         });
 
