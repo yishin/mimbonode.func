@@ -43,13 +43,28 @@ serve(async (req) => {
     console.log("user_id:" + JSON.stringify(user.id));
 
     // 요청 데이터 파싱 : 없음
-    const { fullname } = await req.json();
+    const { fullname, feeding } = await req.json();
 
     if (fullname) {
       const { data, error } = await supabase
         .from("profiles")
         .update({ full_name: fullname })
-        .eq("id", user.id);
+        .eq("user_id", user.id);
+
+      if (error) {
+        console.error("Failed to update profile:", error);
+        return new Response(
+          JSON.stringify({ success: false, error: "Failed to update profile" }),
+          { status: 200, headers },
+        );
+      }
+    }
+
+    if (feeding) {
+      const { data, error } = await supabase
+        .from("profiles")
+        .update({ feeding: feeding })
+        .eq("user_id", user.id);
 
       if (error) {
         console.error("Failed to update profile:", error);
