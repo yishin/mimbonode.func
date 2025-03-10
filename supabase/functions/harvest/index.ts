@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.131.0/http/server.ts";
+
 import {
   getAddressBySid,
   getAddressByUsername,
@@ -81,13 +82,63 @@ serve(async (req) => {
       );
     }
 
-    // MiningPower 계산
-    const miningPower = myPackages.reduce((acc, curr) => {
-      return acc + curr.mining_power;
+    // Haverst (mining) package별 채굴량 가감/트랜잭션 기록 생성
+    let totalMined = 0;
+    let remainMatchingBonus = profile.matching_bonus;
+
+    // 토큰 전송 전에 채굴량 계산
+    const miningPromises = myPackages.map(async (pkg) => {
+      // 채굴량
+      let miningAmount = pkg.mining_power * secondsDiff;
+
+      // 남은 최대 채굴량 계산
+      let remainMaxOut = pkg.max_out - pkg.total_mined;
+
+      // 매칭보너스가 남아있으면
+      if (remainMatchingBonus > 0) {
+        // 남은 최대 채굴량이 매칭보너스보다 크면
+        if (remainMaxOut >= remainMatchingBonus) {
+          // 남은 매칭 보너스 만큼 채굴량 증가
+          miningAmount += remainMatchingBonus;
+          // 남은 매칭 보너스 0으로 초기화
+          remainMatchingBonus = 0;
+        } else {
+          // 남은 최대 채굴량 만큼 채굴량 증가
+          miningAmount += remainMaxOut;
+          // 남은 매칭 보너스 감소
+          remainMatchingBonus -= remainMaxOut;
+        }
+      }
+
+      // 채굴량 업데이트
+      const { data: updatePackage, error: updatePackageError } = await supabase
+        .from("mypackages")
+        .update({
+          total_mined: `total_mined + ${miningAmount}`,
+        })
+        .eq("id", pkg.id);
+
+      if (updatePackageError) {
+        console.error("Update package error:", updatePackageError.message);
+      }
+
+      totalMined += miningAmount;
+
+      return { miningAmount, packageId: pkg.id, name: pkg.name };
+    });
+
+    // Promise.all로 모든 비동기 작업 완료 대기
+    const miningResults = await Promise.all(miningPromises);
+
+    // 총 전송할 토큰 계산
+    const totalTransferAmount = miningResults.reduce((acc, curr) => {
+      return acc + curr.miningAmount;
     }, 0);
 
-    // 수익 계산 (MGG)
-    const profit = miningPower * secondsDiff;
+    // * 정책 : 남은 매칭보너스는 지금하지 않고 버림.
+
+    // 사용된 매칭 보너스 계산
+    const usedMatchingBonus = profile.matching_bonus - remainMatchingBonus;
 
     // 토큰 전송
     const fromAddress = settings.wallet_reward;
@@ -97,7 +148,7 @@ serve(async (req) => {
     const result = await sendMgg(
       fromAddress,
       toAddress,
-      profit.toString(),
+      totalTransferAmount.toString(),
     );
 
     if (result.error) {
@@ -108,43 +159,59 @@ serve(async (req) => {
       );
     }
 
-    // Haverst (mining) package별 채굴량 가감/트랜잭션 기록 생성
-    let totalMined = 0;
-    myPackages.forEach(async (myPackage) => {
-      // 트랜잭션 기록 생성
-      const minedAmount = myPackage.mining_power * secondsDiff;
-      totalMined += minedAmount;
+    // profit 변수 정의
+    const profit = totalTransferAmount;
 
-      // 트랜잭션 기록 생성
+    // 트랜잭션 기록 생성 (토큰 전송 후)
+    const txInsertPromises = miningResults.map(async (item) => {
       const { data: miningTx, error: miningTxError } = await supabase
         .from("mining")
         .insert({
           user_id: user.id,
-          package_id: myPackage.id,
-          name: myPackage.name,
-          amount: minedAmount,
+          package_id: item.packageId,
+          name: item.name,
+          amount: item.miningAmount,
           user_level: profile.user_level,
           tx_hash: result.txHash,
         });
 
-      if (miningTxError) {} // 추후 처리
+      if (miningTxError) {
+        console.error("Mining transaction error:", miningTxError.message);
+      }
 
-      // 채굴량 가감
-      const { data: updatePackage, error: updatePackageError } = await supabase
-        .from("mypackages")
-        .update({
-          total_mined: myPackage.total_mined +
-            myPackage.mining_power * secondsDiff,
-        })
-        .eq("id", myPackage.id);
-
-      if (updatePackageError) {} // 추후 처리
+      return miningTx;
     });
+
+    await Promise.all(txInsertPromises);
+
+    // Matching Bonus 지급 Tx 기록
+    if (usedMatchingBonus > 0) {
+      const { data: miningTx, error: miningTxError } = await supabase
+        .from("mining")
+        .insert({
+          user_id: user.id,
+          package_id: crypto.randomUUID(),
+          name: "Matching Bonus",
+          amount: usedMatchingBonus,
+          user_level: profile.user_level,
+          tx_hash: result.txHash,
+        });
+
+      if (miningTxError) {
+        console.error(
+          "Matching bonus transaction error:",
+          miningTxError.message,
+        );
+      }
+
+      // 사용된 매칭 보너스만 더함
+      totalMined += usedMatchingBonus;
+    }
 
     console.log("transferred_amount:" + profit);
     console.log("mining_total_amount:" + totalMined);
 
-    // 프로필 업데이트
+    // 프로필에 마지막 채굴 시간 업데이트
     const { data: updateProfile, error: updateProfileError } = await supabase
       .from("profiles")
       .update({
@@ -152,7 +219,57 @@ serve(async (req) => {
       })
       .eq("user_id", user.id);
 
-    if (updateProfileError) {} // 추후 처리
+    if (updateProfileError) {
+      console.error("Update profile error:", updateProfileError.message);
+    }
+
+    ////////////////////////////////////////////////////////////////
+    // Upline에게 Matching Bonus 지급 처리
+    // 총 35% = 1L:10% 2L:5% 3L:5% 4L:5% 5L:5% 6L:5%
+    // 1~6레벨까지 지급
+    const matchingBonusRate = [10, 5, 5, 5, 5, 5];
+    let totalMatchingBonusRate = 0;
+    let levelCount = 0;
+    let uplineCode = profile.upline_code;
+
+    while (uplineCode) {
+      // 상위 후원자 조회
+      const { data: uplineData, error: uplineError } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("my_referral_code", uplineCode)
+        .single();
+
+      if (uplineError) {
+        break;
+      }
+
+      for (let i = levelCount; i < uplineData.user_level; i++) {
+        totalMatchingBonusRate += matchingBonusRate[i];
+      }
+
+      // matching bonus 지급
+      const reward = (profit * totalMatchingBonusRate) / 100;
+      const { data, error } = await supabase.rpc("increment_matching_bonus", {
+        userid: uplineData.id,
+        mining_total: totalMined,
+        transfer_amount: profit,
+        amount: reward,
+      });
+
+      if (error) {
+        console.error("Error incrementing matching bonus:", error);
+      }
+
+      // 위에서 채굴에 mining에 tx를 넣어서 여기서는 tx를 기록하지 않음.
+
+      // 다음 상위 후원자를 찾기 위해 후원자 코드 업데이트
+      uplineCode = uplineData.upline_code;
+      levelCount++;
+      if (levelCount >= 6) {
+        break;
+      }
+    }
 
     // 성공 응답
     return new Response(
