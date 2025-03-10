@@ -249,12 +249,12 @@ serve(async (req) => {
       }
 
       // matching bonus 지급
-      const reward = (profit * totalMatchingBonusRate) / 100;
+      const bonus = (profit * totalMatchingBonusRate) / 100;
       const { data, error } = await supabase.rpc("increment_matching_bonus", {
-        userid: uplineData.id,
+        userid: uplineData.user_id,
         mining_total: totalMined,
         transfer_amount: profit,
-        amount: reward,
+        amount: bonus,
       });
 
       if (error) {
