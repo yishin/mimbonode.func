@@ -205,15 +205,40 @@ serve(async (req) => {
       if (type === "TRANSFER") { // 내부 사용자에게 전송
         // 토큰 전송
         if (fromToken === "USDT") {
-          // usdt 전송
-          const result = await sendUsdt(fromAddress, toAddress, fromAmount);
-          txHash = result.txHash;
-          feeTxHash = result.feeTxHash;
+          // usdt 전송 (DB)
+          const { data, error } = await supabase.rpc("transfer_usdt", {
+            from_user: from,
+            to_user: to,
+            amount: fromAmount,
+            fee: settings.transfer_fee_usdt,
+          });
+
+          if (error) {
+            console.error("Error transferring USDT:", error);
+            txHash = "";
+            feeTxHash = "";
+          } else {
+            txHash = "OK";
+            feeTxHash = "";
+            feeHash = "OK";
+            feeRate = "";
+            feeAmount = data.fee;
+          }
         } else if (fromToken === "MGG") {
           // mgg 전송
           const result = await sendMgg(fromAddress, toAddress, fromAmount);
           txHash = result.txHash;
-          feeTxHash = result.feeTxHash;
+
+          if (isAdmin) {
+            // 관리자외 수수료 처리
+            const feeAmount = fromAmount * settings.transfer_fee_rate_mgg / 100;
+            const feeResult = await sendMgg(
+              fromAddress,
+              settings.wallet_fee,
+              feeAmount.toString(),
+            );
+            feeTxHash = feeResult.txHash;
+          }
         } else if (fromToken === "BNB") {
           // bnb 전송
           const result = await sendBnb(fromAddress, toAddress, fromAmount);
@@ -292,15 +317,6 @@ serve(async (req) => {
           { status: 400, headers },
         );
       }
-
-      ////////////////////////////////
-      // fee 처리
-      if (!isAdmin) {
-        // 관리자는 수수료 제외
-        if (type === "WITHDRAW") {
-          // 출금시 관리자 승인 체크/출금 요청
-        }
-      }
     } catch (error) {
       console.error("Unexpected error:", error);
       return new Response(
@@ -325,7 +341,7 @@ serve(async (req) => {
             tx_hash: txHash,
             exchange_rate: exchangeRate,
             status: txHash ? "COMPLETED" : "FAILED",
-            fee_rate: settings.swap_fee_rate_mgg,
+            fee_rate: feeRate,
             fee_amount: feeAmount,
             fee_tx_hash: feeTxHash,
           },
