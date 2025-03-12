@@ -221,7 +221,6 @@ serve(async (req) => {
             txHash = "OK";
             feeTxHash = "";
             feeHash = "OK";
-            feeRate = "";
             feeAmount = data.fee;
           }
         } else if (fromToken === "MGG") {
@@ -326,52 +325,55 @@ serve(async (req) => {
     } finally {
       ////////////////////////////////
       // 트랜잭션 기록 생성
-      const { data: transactionData, error: insertError } = await supabase
-        .from("transactions")
-        .insert([
-          {
-            user_id: user.id,
-            transaction_type: type,
-            from: from,
-            from_token: fromToken,
-            from_amount: fromAmount,
-            to: to,
-            to_token: toToken,
-            to_amount: toAmount,
-            tx_hash: txHash,
-            exchange_rate: exchangeRate,
-            status: txHash ? "COMPLETED" : "FAILED",
-            fee_rate: feeRate,
-            fee_amount: feeAmount,
-            fee_tx_hash: feeTxHash,
-          },
-        ])
-        .select()
-        .single();
+      try {
+        const txData = {
+          user_id: user.id,
+          transaction_type: type,
+          from: from,
+          from_token: fromToken,
+          from_amount: fromAmount,
+          to: to,
+          to_token: toToken,
+          to_amount: toAmount,
+          tx_hash: txHash,
+          exchange_rate: exchangeRate,
+          status: txHash ? "COMPLETED" : "FAILED",
+          fee_rate: feeRate,
+          fee_amount: feeAmount,
+          fee_tx_hash: feeTxHash,
+        };
+        const { data: transactionData, error: insertError } = await supabase
+          .from("transactions")
+          .insert([txData])
+          .select()
+          .single();
 
-      if (insertError) {
-        console.error("Error creating transaction record:", insertError);
-      }
+        if (insertError) {
+          console.error("Error creating transaction record:", insertError);
+        }
 
-      // 전송 성공 회신
-      if (txHash) {
-        return new Response(
-          JSON.stringify({
-            success: true,
-            data: transactionData,
-            txHash: txHash,
-            feeTxHash: feeTxHash,
-          }),
-          { status: 200, headers },
-        );
-      } else {
-        return new Response(
-          JSON.stringify({
-            success: false,
-            error: "Transaction failed",
-          }),
-          { status: 200, headers },
-        );
+        // 전송 성공 회신
+        if (txHash) {
+          return new Response(
+            JSON.stringify({
+              success: true,
+              data: transactionData,
+              txHash: txHash,
+              feeTxHash: feeTxHash,
+            }),
+            { status: 200, headers },
+          );
+        } else {
+          return new Response(
+            JSON.stringify({
+              success: false,
+              error: "Transaction failed",
+            }),
+            { status: 200, headers },
+          );
+        }
+      } catch (error) {
+        console.error("Error creating transaction record:", error);
       }
     }
   } catch (error) {
