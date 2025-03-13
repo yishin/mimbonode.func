@@ -84,25 +84,26 @@ serve(async (req) => {
       }
 
       // 최소 출금/스왑/전송 금액 확인
+      const numFromAmount = parseFloat(fromAmount);
       if (
         (type === "WITHDRAW" && fromToken === "USDT" &&
-          fromAmount < settings.minimum_withdraw_usdt) ||
+          numFromAmount < settings.minimum_withdraw_usdt) ||
         (type === "WITHDRAW" && fromToken === "MGG" &&
-          fromAmount < settings.minimum_withdraw_mgg) ||
+          numFromAmount < settings.minimum_withdraw_mgg) ||
         (type === "SWAP" && fromToken === "USDT" &&
-          fromAmount < settings.minimum_swap_usdt) ||
+          numFromAmount < settings.minimum_swap_usdt) ||
         (type === "SWAP" && fromToken === "MGG" &&
-          fromAmount < settings.minimum_swap_mgg) ||
+          numFromAmount < settings.minimum_swap_mgg) ||
         (type === "TRANSFER" && fromToken === "USDT" &&
-          fromAmount < settings.minimum_transfer_usdt) ||
+          numFromAmount < settings.minimum_transfer_usdt) ||
         (type === "TRANSFER" && fromToken === "MGG" &&
-          fromAmount < settings.minimum_transfer_mgg)
+          numFromAmount < settings.minimum_transfer_mgg)
       ) {
         return new Response(
           JSON.stringify({
             error: "Amount is less than the minimum required.",
           }),
-          { status: 400, headers },
+          { status: 200, headers },
         );
       }
 
