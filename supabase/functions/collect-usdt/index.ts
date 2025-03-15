@@ -63,49 +63,53 @@ serve(async (req) => {
     // 입금된 USDT 수령
     ///////////////////////////////
 
-    const type = "DEPOSIT";
-    const from = profile.username; // USDT가 입금된 tx를 찾아서 기록해야 함
-    const fromToken = "USDT";
-    const fromAmount = amount;
-    const to = profile.username; // 트랜젝션에 사용자가 받는것으로 기록
-    const toToken = "";
-    const toAmount = 0;
+    let type = "DEPOSIT";
+    let from = "EXTERNAL"; //profile.username; // USDT가 입금된 tx를 찾아서 기록해야 함
+    let fromToken = "USDT";
+    let fromAmount = amount;
+    let to = profile.username; // 트랜젝션에 사용자가 받는것으로 기록
+    let toToken = "";
+    let toAmount = 0;
     let txHash = "";
     let txAddress = "";
 
     try {
       // 0. 블럭체인에서 마지막 tx 기록 조회
-      const lastTx = await getUsdtLastTx(address);
-      if (!lastTx?.txHash) {
-        throw new Error("Failed to get last USDT transaction");
-      }
+      // const lastTx = await getUsdtLastTx(address);
+      // if (!lastTx?.txHash) {
+      //   throw new Error("Failed to get last USDT transaction");
+      // }
 
-      txHash = lastTx.txHash;
-      txAddress = lastTx.txAddress;
+      // txHash = lastTx.txHash;
+      // txAddress = lastTx.txAddress;
 
       // 1. 개인 지갑에서 입금된 USDT 조회
       const balance = await getUsdtBalance(address);
-      if (balance < amount) {
-        return new Response(
-          JSON.stringify({ error: "Insufficient balance" }),
-          { status: 400, headers },
-        );
-      }
+      // if (balance < amount) {
+      //   return new Response(
+      //     JSON.stringify({ error: "Insufficient balance" }),
+      //     { status: 400, headers },
+      //   );
+      // }
+      fromAmount = balance;
+      toToken = "USDT";
+      toAmount = balance;
 
       // 2. 입금용 운영 지갑으로 전송
       setOperationWallet(settings.wallet_operation); // 수수료는 운영지갑에서 처리
-      const result = await sendUsdt(address, settings.wallet_deposit, amount);
+      const result = await sendUsdt(address, settings.wallet_deposit, toAmount);
 
       if (!result.txHash) {
-        throw new Error("Failed to send USDT");
+        throw new Error("Failed to DEPOSIT USDT process");
       }
+      txHash = result.txHash;
 
       // 4. Wallet 테이블의 usdt_balance 필드 업데이트
       const { data: walletData, error: walletError } = await supabase.rpc(
         "collect_usdt",
         {
           userid: user.id,
-          amount: amount,
+          amount: balance,
         },
       );
 
@@ -129,7 +133,7 @@ serve(async (req) => {
           {
             user_id: user.id,
             transaction_type: type,
-            from: txAddress,
+            from: from,
             from_token: fromToken,
             from_amount: fromAmount,
             to: to,
