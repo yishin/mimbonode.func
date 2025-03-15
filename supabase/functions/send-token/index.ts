@@ -51,6 +51,7 @@ serve(async (req) => {
       to,
       toToken,
       toAmount: toAmountOrg,
+      adminPage, // 관리자 페이지 여부
     } = await req.json();
 
     // tx / fee 변수 초기화
@@ -120,31 +121,36 @@ serve(async (req) => {
       if (type === "WITHDRAW") {
         if (fromToken === "USDT" && settings.minimum_withdraw_usdt > 0) {
           // 1일이내 출금 금액 확인
-          const prevWithdrawals = await supabase
-            .from("transactions")
-            .select("sum(to_amount) as total_amount")
-            .eq("user_id", user.id)
-            .eq("type", "WITHDRAW")
-            .eq("token", "USDT")
-            .lte(
-              "created_at",
-              new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-            )
-            .single();
+          const { data: totalWithdrawals, error } = await supabase.rpc(
+            "get_user_usdt_withdrawal_24h",
+            {
+              userid: user.id,
+            },
+          );
 
-          if (
-            prevWithdrawals.data.total_amount > settings.minimum_withdraw_usdt
-          ) {
-            // 허용금액 초과
-            return new Response(
-              JSON.stringify({ error: "Withdrawal amount exceeds the limit." }),
-              { status: 200, headers },
+          if (error) {
+            console.error(
+              "Error fetching previous withdrawals:",
+              error.message,
             );
+            return new Error("Request failed: " + error.message);
           }
 
+          if (toAmount < parseFloat(settings.minimum_withdraw_usdt)) {
+            // 허용금액 미달
+            return new Error(
+              "Withdrawal amount is less than the minimum required.",
+            );
+          }
+          // 출금 가능 잔액확인
+          if (wallet.usdt_balance < parseFloat(fromAmount)) {
+            return rejectRequest("Insufficient balance");
+          }
+
+          // 관리자 승인이 필요한 금액인지 확인
           if (
-            prevWithdrawals.data.total_amount + fromAmount >
-              settings.minimum_withdraw_usdt
+            totalWithdrawals + parseFloat(fromAmount) >
+              parseFloat(settings.confirm_over_usdt_amount_day)
           ) {
             // 관리자 승인 요청
             const { data: transactionData, error: insertError } = await supabase
@@ -222,7 +228,7 @@ serve(async (req) => {
         // 전송 처리
         ////////////////////////////////
         if (fromToken === "USDT") {
-          if (isAdmin) {
+          if (isAdmin && adminPage) {
             // 관리자 전송
             const result = await sendUsdt(fromAddress, toAddress, fromAmount);
             txHash = result.txHash;
@@ -350,30 +356,71 @@ serve(async (req) => {
         ////////////////////////////////
         if (fromToken === "USDT") {
           // USDT 출금 처리
-          if (settings.fee_withdraw_usdt > 0) {
-            feeAmount =
-              (parseFloat(fromAmount) * settings.withdraw_fee_usdt_per_10000 /
-                10000).toFixed(2);
+          if (
+            parseFloat(settings.withdraw_fee_usdt_per_10000) >
+              0
+          ) {
+            // 수수료 계산
+            const feePer10000 = parseFloat(
+              settings.withdraw_fee_usdt_per_10000,
+            );
+
+            // 10000 USDT 당 수수료 계산
+            const units = Math.floor(parseFloat(fromAmount) / 10000) + 1;
+
+            feeAmount = (units * feePer10000).toFixed(2);
             toAmount = (parseFloat(fromAmount) - feeAmount).toFixed(2);
           } else {
+            // 수수료 없음
+            feeAmount = 0;
             toAmount = fromAmount;
           }
-          // USDT 출금 처리
-          const result = await sendUsdt(fromAddress, toAddress, toAmount);
-          txHash = result.txHash;
-
-          const resultFee = await sendUsdt(
-            fromAddress,
-            settings.wallet_fee,
-            feeAmount,
+          // USDT 출금 처리 : 출금 지갑에서 수수료를 제외한 금액의 USDT를 출금한다.
+          // DB에서 사용자의 USDT 잔액에서 출금 금액의 USDT를 차감한다.
+          // 수수료 출금 : DB에서 사용자의 USDT 잔액에서 수수료를 차감한다.
+          const { data: updateUsdtBalance, error: updateUsdtBalanceError } =
+            await supabase
+              .rpc("decrease_usdt_balance", {
+                userid: user.id,
+                amount: parseFloat(fromAmount),
+              });
+          if (updateUsdtBalanceError) {
+            console.error(
+              "Error updating USDT balance:",
+              updateUsdtBalanceError,
+            );
+          }
+          // 토큰을 전송한다.
+          const result = await sendUsdt(
+            settings.wallet_withdraw,
+            toAddress,
+            toAmount,
           );
-          feeTxHash = resultFee.txHash;
+          if (result.success) {
+            txHash = result.txHash;
+          } else {
+            // 토큰 전송 실패시 잔액 복구
+            const { data: updateUsdtBalance, error: updateUsdtBalanceError } =
+              await supabase
+                .rpc("increment_usdt_balance", {
+                  userid: user.id,
+                  amount: parseFloat(fromAmount),
+                });
+            if (updateUsdtBalanceError) {
+              console.error(
+                "Error updating USDT balance:",
+                updateUsdtBalanceError,
+              );
+            }
+            return rejectRequest("Transaction failed");
+          }
         } else if (fromToken === "MGG") {
           // mgg 출금
-          if (settings.withdraw_fee_rate_mgg > 0) {
-            feeAmount =
-              (parseFloat(fromAmount) * settings.withdraw_fee_rate_mgg / 100)
-                .toFixed(0);
+          if (parseFloat(settings.withdraw_fee_rate_mgg) > 0) {
+            feeAmount = (parseFloat(fromAmount) *
+              parseFloat(settings.withdraw_fee_rate_mgg) /
+              100)
+              .toFixed(0);
             toAmount = parseFloat(fromAmount) - feeAmount;
           } else {
             feeAmount = 0;
@@ -383,7 +430,7 @@ serve(async (req) => {
           txHash = result.txHash;
 
           // mgg fee 출금처리
-          if (settings.withdraw_fee_rate_mgg > 0) {
+          if (parseFloat(settings.withdraw_fee_rate_mgg) > 0) {
             const resultFee = await sendMgg(
               fromAddress,
               settings.wallet_fee,
@@ -463,7 +510,7 @@ serve(async (req) => {
     console.error("Unexpected error:", error);
     return new Response(
       JSON.stringify({ error: "Internal server error" }),
-      { status: 500, headers },
+      { status: 200, headers },
     );
   }
 });
