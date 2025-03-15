@@ -15,6 +15,7 @@ import {
 } from "../utils/tokenUtils.ts";
 import { setCorsHeaders } from "../utils/corsUtils.ts";
 import { authenticateRequest } from "../utils/authUtils.ts";
+import { rotl } from "https://esm.sh/@noble/hashes@1.4.0/utils.js";
 
 // Edge Function 시작
 serve(async (req) => {
@@ -42,10 +43,18 @@ serve(async (req) => {
     console.log("user_id:" + JSON.stringify(user.id));
 
     // 요청 데이터 파싱
-    const { type, from, fromToken, fromAmount, to, toToken, toAmount } =
-      await req.json();
+    const {
+      type,
+      from,
+      fromToken,
+      fromAmount,
+      to,
+      toToken,
+      toAmount: toAmountOrg,
+    } = await req.json();
 
     // tx / fee 변수 초기화
+    let toAmount = toAmountOrg;
     let txHash = "";
     let feeTxHash = "";
     let feeAmount = 0; // 수수료 금액(mgg)
@@ -174,7 +183,8 @@ serve(async (req) => {
         }
 
         // 최소 스왑 금액 확인
-        if (fromAmount < settings.minimum_swap_mgg) {
+        const numFromAmount = parseFloat(fromAmount);
+        if (numFromAmount < settings.minimum_swap_mgg) {
           return rejectRequest("Minimum swap amount is not met");
         }
       }
@@ -189,7 +199,7 @@ serve(async (req) => {
     if (!from || !to) {
       return new Response(
         JSON.stringify({ error: "Invalid request" }),
-        { status: 400, headers },
+        { status: 200, headers },
       );
     }
 
@@ -199,45 +209,61 @@ serve(async (req) => {
       : from.startsWith("0x")
       ? from
       : await getAddressByUsername(from);
-    const toAddress = to.startsWith("0x") ? to : await getAddressByUsername(to);
+    const toAddress = to.startsWith("sid:")
+      ? await getAddressBySid(to.split(":")[1])
+      : to.startsWith("0x")
+      ? to
+      : await getAddressByUsername(to);
 
     try {
       // 전송 처리
       if (type === "TRANSFER") { // 내부 사용자에게 전송
-        // 토큰 전송
+        ////////////////////////////////
+        // 전송 처리
+        ////////////////////////////////
         if (fromToken === "USDT") {
-          // usdt 전송 (DB)
-          const { data, error } = await supabase.rpc("transfer_usdt", {
-            from_user: from,
-            to_user: to,
-            amount: fromAmount,
-            fee: settings.transfer_fee_usdt,
-          });
-
-          if (error) {
-            console.error("Error transferring USDT:", error);
-            txHash = "";
-            feeTxHash = "";
+          if (isAdmin) {
+            // 관리자 전송
+            const result = await sendUsdt(fromAddress, toAddress, fromAmount);
+            txHash = result.txHash;
+            feeTxHash = result.feeTxHash;
           } else {
-            txHash = "OK";
-            feeTxHash = "";
-            feeHash = "OK";
-            feeAmount = data.fee;
+            // usdt 전송 (DB)
+            const { data, error } = await supabase.rpc("transfer_usdt", {
+              from_user: from,
+              to_user: to,
+              amount: fromAmount,
+              fee: settings.transfer_fee_usdt,
+            });
+            if (error || data?.error) {
+              console.error("Error transferring USDT:", error || data?.error);
+              txHash = "";
+              feeTxHash = "";
+            } else {
+              txHash = "OK";
+              feeTxHash = "";
+              feeHash = "OK";
+              feeAmount = data.fee;
+            }
           }
         } else if (fromToken === "MGG") {
           // mgg 전송
           const result = await sendMgg(fromAddress, toAddress, fromAmount);
           txHash = result.txHash;
 
-          if (isAdmin) {
+          if (!isAdmin) {
             // 관리자외 수수료 처리
-            const feeAmount = fromAmount * settings.transfer_fee_rate_mgg / 100;
+            const feeSendAmount = fromAmount * settings.transfer_fee_rate_mgg /
+              100;
             const feeResult = await sendMgg(
               fromAddress,
               settings.wallet_fee,
-              feeAmount.toString(),
+              feeSendAmount.toString(),
             );
-            feeTxHash = feeResult.txHash;
+            if (feeResult) {
+              feeTxHash = feeResult.txHash;
+              feeAmount = feeSendAmount;
+            }
           }
         } else if (fromToken === "BNB") {
           // bnb 전송
@@ -246,7 +272,9 @@ serve(async (req) => {
           feeTxHash = result.feeTxHash;
         }
       } else if (type === "SWAP") { // SWAP
+        ////////////////////////////////
         // 스왑 처리
+        ////////////////////////////////
         if (fromToken === "MGG" && toToken === "USDT") {
           // mgg -> usdt 스왑
           exchangeRate = parseFloat(settings.mgg_price_in_usdt);
@@ -276,8 +304,14 @@ serve(async (req) => {
             settings.wallet_operation,
             fromAmount,
           );
-          txHash = result.txHash;
-
+          if (result.success) {
+            txHash = result.txHash;
+          } else {
+            return new Response(
+              JSON.stringify({ error: "Transaction failed" }),
+              { status: 400, headers },
+            );
+          }
           // 2. 수수료 처리
           feeAmount = parseFloat(fromAmount) *
             parseFloat(settings.swap_fee_rate_mgg) / 100;
@@ -307,14 +341,62 @@ serve(async (req) => {
           );
         }
       } else if (type === "DEPOSIT") { // DEPOSIT
-        // 없음
+        ////////////////////////////////
+        // 입금 처리
+        ////////////////////////////////
       } else if (type === "WITHDRAW") { // WITHDRAW
-        // 출금 정책 확인
+        ////////////////////////////////
+        // 출금 처리
+        ////////////////////////////////
+        if (fromToken === "USDT") {
+          // USDT 출금 처리
+          if (settings.fee_withdraw_usdt > 0) {
+            feeAmount =
+              (parseFloat(fromAmount) * settings.withdraw_fee_usdt_per_10000 /
+                10000).toFixed(2);
+            toAmount = (parseFloat(fromAmount) - feeAmount).toFixed(2);
+          } else {
+            toAmount = fromAmount;
+          }
+          // USDT 출금 처리
+          const result = await sendUsdt(fromAddress, toAddress, toAmount);
+          txHash = result.txHash;
+
+          const resultFee = await sendUsdt(
+            fromAddress,
+            settings.wallet_fee,
+            feeAmount,
+          );
+          feeTxHash = resultFee.txHash;
+        } else if (fromToken === "MGG") {
+          // mgg 출금
+          if (settings.withdraw_fee_rate_mgg > 0) {
+            feeAmount =
+              (parseFloat(fromAmount) * settings.withdraw_fee_rate_mgg / 100)
+                .toFixed(0);
+            toAmount = parseFloat(fromAmount) - feeAmount;
+          } else {
+            feeAmount = 0;
+            toAmount = fromAmount;
+          }
+          const result = await sendMgg(fromAddress, toAddress, fromAmount);
+          txHash = result.txHash;
+
+          // mgg fee 출금처리
+          if (settings.withdraw_fee_rate_mgg > 0) {
+            const resultFee = await sendMgg(
+              fromAddress,
+              settings.wallet_fee,
+              feeAmount,
+            );
+            feeTxHash = resultFee.txHash;
+          }
+        }
       } else {
         // 에러
         return new Response(
           JSON.stringify({ error: "Invalid request" }),
-          { status: 400, headers },
+          { status: 200, headers },
         );
       }
     } catch (error) {
