@@ -16,6 +16,7 @@ import {
 } from "../utils/tokenUtils.ts";
 import { setCorsHeaders } from "../utils/corsUtils.ts";
 import { authenticateRequest } from "../utils/authUtils.ts";
+import { min } from "https://esm.sh/@types/bn.js@5.1.6/index.js";
 
 // Edge Function 시작
 serve(async (req) => {
@@ -62,9 +63,25 @@ serve(async (req) => {
 
     if (secondsDiff < settings.mining_cooltime) {
       return new Response(
-        JSON.stringify({ error: "Mining cooltime" }),
-        { status: 400, headers },
+        JSON.stringify({ error: "Mining cooltime error" }),
+        { status: 200, headers },
       );
+    }
+
+    ////////////////////////////////////////////////////////////////
+    // 채굴 처리
+    ////////////////////////////////////////////////////////////////
+
+    // 프로필에 마지막 채굴 시간 업데이트하여 중복 채굴 방지
+    const { data: updateProfile, error: updateProfileError } = await supabase
+      .from("profiles")
+      .update({
+        last_harvest: currentTime,
+      })
+      .eq("user_id", profile.user_id);
+
+    if (updateProfileError) {
+      console.error("Update profile error:", updateProfileError.message);
     }
 
     // 사용자의 my_packages 조회 : status = "active"
@@ -73,7 +90,7 @@ serve(async (req) => {
       .select("*")
       .eq("user_id", user.id)
       .eq("status", "active")
-      .order("created_at", { ascending: true });
+      .order("sid", { ascending: true });
 
     if (myPackagesError) {
       console.error("Error fetching my packages:", myPackagesError);
@@ -84,73 +101,93 @@ serve(async (req) => {
     }
 
     // Haverst (mining) package별 채굴량 가감/트랜잭션 기록 생성
-    let totalMined = 0;
-    let remainMatchingBonus = profile.matching_bonus;
+    let totalMined = 0; // 총 채굴량
+    let remainMatchingBonus = profile.matching_bonus; // 남은 매칭보너스
 
-    // 토큰 전송 전에 채굴량 계산
-    const miningPromises = myPackages.map(async (pkg) => {
-      // 채굴량
-      let miningAmount = pkg.mining_power * secondsDiff;
+    const totalMiningPower = myPackages.reduce((sum, pkg) => {
+      return sum + pkg.mining_power;
+    }, 0); // 총 채굴력
+    const remainMaxOut = myPackages.reduce((sum, pkg) => {
+      return sum + (pkg.max_out - pkg.total_mined);
+    }, 0); // 남은 최대 채굴량
 
-      // 남은 최대 채굴량 계산
-      let remainMaxOut = pkg.max_out - pkg.total_mined;
+    let toMiningAmount = totalMiningPower * secondsDiff + remainMatchingBonus; // 총 채굴할 량 = 총 채굴력 * 채굴 시간 + 남은 매칭보너스
 
-      // 매칭보너스가 남아있으면
-      if (remainMatchingBonus > 0) {
-        // 남은 최대 채굴량이 매칭보너스보다 크면
-        if (remainMaxOut >= remainMatchingBonus) {
-          // 남은 매칭 보너스 만큼 채굴량 증가
-          miningAmount += remainMatchingBonus;
-          // 남은 매칭 보너스 0으로 초기화
-          remainMatchingBonus = 0;
-        } else {
-          // 남은 최대 채굴량 만큼 채굴량 증가
-          miningAmount += remainMaxOut;
-          // 남은 매칭 보너스 감소
-          remainMatchingBonus -= remainMaxOut;
+    // 토큰 전송 전에 노드별 채굴
+    for (const pkg of myPackages) {
+      if (pkg.status !== "active" || pkg.total_mined >= pkg.max_out) {
+        continue;
+      }
+
+      // 패키지의 남은 최대 채굴량 계산
+      let remainPkgMiningAmount = pkg.max_out - pkg.total_mined;
+
+      // 패키지 남은 채굴량이 총 채굴할 량보다 작으면 => 패키지 남은 채굴량만큼 채굴하고 다음 패키지 채굴
+      let miningAmount = Math.min(remainPkgMiningAmount, toMiningAmount);
+      pkg.total_mined += miningAmount;
+      if (pkg.total_mined === pkg.max_out) {
+        // 패키지 완전 채굴 처리
+        const { data, error } = await supabase
+          .from("mypackages")
+          .update({
+            total_mined: pkg.total_mined,
+            status: "completed",
+          })
+          .eq("id", pkg.id);
+
+        if (error) {
+          console.error("Error updating package:", error);
         }
+
+        // 총 채굴할 량에서 패키지 채굴량 차감
+        pkg.miningAmount = miningAmount;
+        toMiningAmount -= miningAmount;
+        totalMined += miningAmount;
+      } else {
+        //
+        const { data, error } = await supabase
+          .from("mypackages")
+          .update({
+            total_mined: pkg.total_mined,
+          })
+          .eq("id", pkg.id);
+
+        if (error) {
+          console.error("Error updating package:", error);
+        }
+
+        // 총 채굴할 량에서 패키지 채굴량 차감
+        pkg.miningAmount = miningAmount;
+        toMiningAmount -= miningAmount;
+        totalMined += miningAmount;
+        break;
       }
 
-      // 채굴량 업데이트
-      const { data: updatePackage, error: updatePackageError } = await supabase
-        .from("mypackages")
-        .update({
-          total_mined: `total_mined + ${miningAmount}`,
-        })
-        .eq("id", pkg.id);
-
-      if (updatePackageError) {
-        console.error("Update package error:", updatePackageError.message);
+      if (toMiningAmount <= 0) {
+        break;
       }
-
-      totalMined += miningAmount;
-
-      return { miningAmount, packageId: pkg.id, name: pkg.name };
-    });
-
-    // Promise.all로 모든 비동기 작업 완료 대기
-    const miningResults = await Promise.all(miningPromises);
-
-    // 총 전송할 토큰 계산
-    const totalTransferAmount = miningResults.reduce((acc, curr) => {
-      return acc + curr.miningAmount;
-    }, 0);
+    }
 
     // * 정책 : 남은 매칭보너스는 지금하지 않고 버림.
+    console.log("remainMiningAmount:" + toMiningAmount);
+    console.log("totalMined:" + totalMined);
 
-    // 사용된 매칭 보너스 계산
-    const usedMatchingBonus = profile.matching_bonus - remainMatchingBonus;
+    ////////////////////////////////////////////////////////////////
+    // 토큰 전송 처리
+    ////////////////////////////////////////////////////////////////
+
+    // 총 전송할 토큰(Matching Bonus 제외) 계산
+    const totalTransferAmount = totalMined;
 
     // 토큰 전송
-    const fromAddress = settings.wallet_reward;
     const toAddress = wallet.address;
 
-    setOperationWallet(fromAddress); // 수수료를 지불할 지갑 설정
+    setOperationWallet(settings.wallet_operation); // 수수료를 지불할 지갑 설정
     const result = await sendMgg(
-      fromAddress,
+      settings.wallet_reward,
       toAddress,
       totalTransferAmount.toString(),
-    );
+    ); // 마이닝한 만큼 MGG 토큰 전송
 
     if (result.error) {
       console.error("Error sending MGG:", result.error);
@@ -163,15 +200,23 @@ serve(async (req) => {
     // profit 변수 정의
     const profit = totalTransferAmount;
 
-    // 트랜잭션 기록 생성 (토큰 전송 후)
-    const txInsertPromises = miningResults.map(async (item) => {
+    // 패키지별 마이닝 기록 생성 (토큰 전송 후)
+    for (const pkg of myPackages) {
+      if (
+        pkg.status !== "active" || pkg.total_mined >= pkg.max_out ||
+        pkg.miningAmount > 0
+      ) {
+        continue;
+      }
+
+      // 패키지별 마이닝 기록 생성
       const { data: miningTx, error: miningTxError } = await supabase
         .from("mining")
         .insert({
           user_id: user.id,
-          package_id: item.packageId,
-          name: item.name,
-          amount: item.miningAmount,
+          package_id: pkg.id,
+          name: pkg.name,
+          amount: pkg.miningAmount,
           user_level: profile.user_level,
           tx_hash: result.txHash,
         });
@@ -179,13 +224,10 @@ serve(async (req) => {
       if (miningTxError) {
         console.error("Mining transaction error:", miningTxError.message);
       }
+    }
 
-      return miningTx;
-    });
-
-    await Promise.all(txInsertPromises);
-
-    // Matching Bonus 지급 Tx 기록
+    // Matching Bonus 마이닝 Tx 기록
+    const usedMatchingBonus = totalMined - (totalMiningPower * secondsDiff); // 사용된 매칭 보너스 = 총 마이닝량(마이닝량+매칭보너스) - (마이닝량)
     if (usedMatchingBonus > 0) {
       const { data: miningTx, error: miningTxError } = await supabase
         .from("mining")
@@ -225,18 +267,6 @@ serve(async (req) => {
         "Update matching bonus error:",
         updateMatchingBonusError.message,
       );
-    }
-
-    // 프로필에 마지막 채굴 시간 업데이트
-    const { data: updateProfile, error: updateProfileError } = await supabase
-      .from("profiles")
-      .update({
-        last_harvest: currentTime,
-      })
-      .eq("user_id", profile.user_id);
-
-    if (updateProfileError) {
-      console.error("Update profile error:", updateProfileError.message);
     }
 
     ////////////////////////////////////////////////////////////////
