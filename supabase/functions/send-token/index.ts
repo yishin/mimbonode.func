@@ -234,12 +234,14 @@ serve(async (req) => {
             txHash = result.txHash;
             feeTxHash = result.feeTxHash;
           } else {
+            feeAmount = parseFloat(settings.transfer_fee_usdt);
+            toAmount = parseFloat(fromAmount) - feeAmount;
             // usdt 전송 (DB)
             const { data, error } = await supabase.rpc("transfer_usdt", {
               from_user: from,
               to_user: to,
-              amount: fromAmount,
-              fee: settings.transfer_fee_usdt,
+              amount: toAmount,
+              fee: feeAmount,
             });
             if (error || data?.error) {
               console.error("Error transferring USDT:", error || data?.error);
@@ -253,22 +255,23 @@ serve(async (req) => {
             }
           }
         } else if (fromToken === "MGG") {
+          feeAmount = fromAmount * settings.transfer_fee_rate_mgg /
+            100;
+          toAmount = fromAmount - feeAmount;
           // mgg 전송
-          const result = await sendMgg(fromAddress, toAddress, fromAmount);
+          const result = await sendMgg(fromAddress, toAddress, toAmount);
           txHash = result.txHash;
 
           if (!isAdmin) {
             // 관리자외 수수료 처리
-            const feeSendAmount = fromAmount * settings.transfer_fee_rate_mgg /
-              100;
             const feeResult = await sendMgg(
               fromAddress,
               settings.wallet_fee,
-              feeSendAmount.toString(),
+              feeAmount.toString(),
             );
             if (feeResult) {
               feeTxHash = feeResult.txHash;
-              feeAmount = feeSendAmount;
+              feeAmount = feeAmount;
             }
           }
         } else if (fromToken === "BNB") {
@@ -283,32 +286,40 @@ serve(async (req) => {
         ////////////////////////////////
         if (fromToken === "MGG" && toToken === "USDT") {
           // mgg -> usdt 스왑
-          exchangeRate = parseFloat(settings.mgg_price_in_usdt);
+          exchangeRate = parseFloat(settings.mgg_price_in_usdt); // tx 기록용
+          feeRate = parseFloat(settings.swap_fee_rate_mgg);
+          feeAmount = (parseFloat(fromAmount) * feeRate / 100)
+            .toFixed(8);
+          toAmount = parseFloat(
+            (parseFloat(fromAmount) - feeAmount) *
+              parseFloat(settings.mgg_price_in_usdt),
+          ).toFixed(8);
 
           // 0. 스왑 금액에 필요한 검증
 
           // toAmount 금액이 맞는지 확인
-          const toAmountVerified = parseFloat(fromAmount) *
-            parseFloat(settings.mgg_price_in_usdt);
-          if (toAmountVerified !== parseFloat(toAmount)) {
+          const toAmountVerified = parseFloat(
+            (parseFloat(fromAmount) - feeAmount) *
+              exchangeRate,
+          ).toFixed(8);
+          if (String(toAmountVerified) !== String(toAmount)) {
             return rejectRequest("Invalid amount");
           }
 
           // 잔액확인
-          const toAmountTotal = parseFloat(fromAmount) +
-            parseFloat(fromAmount) * settings.swap_fee_rate_mgg / 100;
           const mggBalance = await getMggBalance(fromAddress);
-          if (toAmountTotal > mggBalance) {
+          if (parseFloat(fromAmount) > parseFloat(mggBalance)) {
             return new Response(
               JSON.stringify({ error: "Insufficient balance" }),
               { status: 400, headers },
             );
           }
           // 1. mgg 토큰을 운영지갑으로 전송 (전송금액)
+          const toSendAmount = parseFloat(fromAmount) - parseFloat(feeAmount);
           const result = await sendMgg(
             fromAddress,
             settings.wallet_operation,
-            fromAmount,
+            toSendAmount.toString(),
           );
           if (result.success) {
             txHash = result.txHash;
@@ -319,8 +330,6 @@ serve(async (req) => {
             );
           }
           // 2. 수수료 처리
-          feeAmount = parseFloat(fromAmount) *
-            parseFloat(settings.swap_fee_rate_mgg) / 100;
           const feeResult = await sendMgg(
             fromAddress,
             settings.wallet_fee,
@@ -368,8 +377,8 @@ serve(async (req) => {
             // 10000 USDT 당 수수료 계산
             const units = Math.floor(parseFloat(fromAmount) / 10000) + 1;
 
-            feeAmount = (units * feePer10000).toFixed(2);
-            toAmount = (parseFloat(fromAmount) - feeAmount).toFixed(2);
+            feeAmount = units * feePer10000;
+            toAmount = parseFloat(fromAmount) - feeAmount;
           } else {
             // 수수료 없음
             feeAmount = 0;
@@ -417,10 +426,9 @@ serve(async (req) => {
         } else if (fromToken === "MGG") {
           // mgg 출금
           if (parseFloat(settings.withdraw_fee_rate_mgg) > 0) {
-            feeAmount = (parseFloat(fromAmount) *
+            feeAmount = parseFloat(fromAmount) *
               parseFloat(settings.withdraw_fee_rate_mgg) /
-              100)
-              .toFixed(0);
+              100;
             toAmount = parseFloat(fromAmount) - feeAmount;
           } else {
             feeAmount = 0;
