@@ -434,7 +434,7 @@ serve(async (req) => {
             feeAmount = 0;
             toAmount = fromAmount;
           }
-          const result = await sendMgg(fromAddress, toAddress, fromAmount);
+          const result = await sendMgg(fromAddress, toAddress, toAmount);
           txHash = result.txHash;
 
           // mgg fee 출금처리
