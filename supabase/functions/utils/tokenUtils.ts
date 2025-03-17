@@ -454,7 +454,7 @@ export async function sendMgg(
         } BNB`,
       );
 
-      // await new Promise((resolve) => setTimeout(resolve, 3000)); // 3초 대기
+      await new Promise((resolve) => setTimeout(resolve, 3000));
     }
 
     const nonce = await web3.eth.getTransactionCount(fromAddress, "pending");
@@ -592,7 +592,7 @@ export async function sendUsdt(
         } BNB`,
       );
 
-      // await new Promise((resolve) => setTimeout(resolve, 3000)); // 3초 대기
+      await new Promise((resolve) => setTimeout(resolve, 3000));
     }
 
     const nonce = await web3.eth.getTransactionCount(fromAddress, "pending");
