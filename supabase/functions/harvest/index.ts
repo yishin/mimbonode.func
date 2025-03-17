@@ -101,7 +101,12 @@ serve(async (req) => {
     let remainMatchingBonus = profile.matching_bonus; // 남은 매칭보너스
 
     const totalMiningPower = myPackages.reduce((sum, pkg) => {
-      return sum + pkg.mining_power;
+      // 이미 채굴된 노드는 채굴력 더하지 않음
+      if (pkg.total_mined < pkg.max_out) {
+        return sum + parseFloat(pkg.mining_power);
+      }
+
+      return sum;
     }, 0); // 총 채굴력
 
     const feeAmount = parseFloat(settings.harvest_fee);
