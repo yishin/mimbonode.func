@@ -467,25 +467,26 @@ serve(async (req) => {
             `Successfully applied matching bonus to ${uplineUser.username}`,
           );
 
-          // 매칭 보너스 지급 기록 생성 (선택적)
-          // const { data: bonusTx, error: bonusTxError } = await supabase
-          //   .from("matching_bonus_history")
-          //   .insert({
-          //     from_user_id: user.id,
-          //     to_user_id: uplineUser.user_id,
-          //     level: levelCount + 1,
-          //     rate: currentLevelBonusRate,
-          //     base_amount: profit,
-          //     bonus_amount: bonus,
-          //     tx_hash: result.txHash,
-          //   });
+          // 매칭 보너스 지급 기록 생성
+          const { data: bonusTx, error: bonusTxError } = await supabase
+            .from("commissions")
+            .insert({
+              wallet: "MGG",
+              user_id: uplineUser.user_id,
+              type: "matching bonus",
+              amount: bonus,
+              total_amount: profit,
+              message: `Matching bonus from ${profile.username} (level ${
+                levelCount + 1
+              })`,
+            });
 
-          // if (bonusTxError) {
-          //   console.error(
-          //     "Error recording matching bonus history:",
-          //     bonusTxError,
-          //   );
-          // }
+          if (bonusTxError) {
+            console.error(
+              "Error recording matching bonus history:",
+              bonusTxError,
+            );
+          }
         }
       } else {
         console.log(
