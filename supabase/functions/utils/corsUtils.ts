@@ -12,12 +12,16 @@ export function setCorsHeaders(req: Request) {
         "http://localhost:5173",
         "https://preview.mimbonode.io",
         "https://www.mimbonode.io",
+        "https://mining.mimbonode.io",
     ];
 
     if (origin && allowedOrigins.includes(origin)) {
         headers.set("Access-Control-Allow-Origin", origin);
     } else {
-        headers.set("Access-Control-Allow-Origin", "https://www.mimbonode.io");
+        headers.set(
+            "Access-Control-Allow-Origin",
+            "https://mining.mimbonode.io",
+        );
     }
 
     return headers;
