@@ -446,6 +446,11 @@ serve(async (req) => {
             );
             feeTxHash = resultFee.txHash;
           }
+        } else if (fromToken === "BNB") {
+          // bnb 출금
+          const result = await sendBnb(fromAddress, toAddress, fromAmount);
+          txHash = result.txHash;
+          feeTxHash = result.feeTxHash;
         }
       } else {
         // 에러
