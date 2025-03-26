@@ -40,7 +40,7 @@ serve(async (req) => {
 
     //
     const { user, profile, wallet, settings } = authResult;
-    console.log("user_id:" + JSON.stringify(user.id));
+    console.log(`user_id: ${profile.username} (${user.id})`);
 
     /**
      * 요청 데이터 파싱

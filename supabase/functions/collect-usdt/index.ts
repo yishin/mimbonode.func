@@ -46,7 +46,7 @@ serve(async (req) => {
 
     // 사용자 정보 조회
     const { user, profile, wallet, settings } = authResult;
-    console.log("user_id:" + JSON.stringify(user.id));
+    console.log(`user_id: ${profile.username} (${user.id})`);
 
     // 요청 데이터 파싱 : 없음
     const { address, amount } = await req.json();
@@ -85,12 +85,14 @@ serve(async (req) => {
 
       // 1. 개인 지갑에서 입금된 USDT 조회
       const balance = await getUsdtBalance(address);
-      // if (balance < amount) {
-      //   return new Response(
-      //     JSON.stringify({ error: "Insufficient balance" }),
-      //     { status: 400, headers },
-      //   );
-      // }
+      if (Number(balance) <= 0) {
+        return new Response(
+          JSON.stringify({ error: "Insufficient balance" }),
+          { status: 200, headers },
+        );
+      }
+
+      //
       fromAmount = balance;
       toToken = "USDT";
       toAmount = balance;
@@ -118,6 +120,15 @@ serve(async (req) => {
       }
 
       console.log("Success collect_usdt:" + balance);
+      // 성공 응답
+      return new Response(
+        JSON.stringify({
+          success: true,
+          amount: balance,
+          message: "Collect successful",
+        }),
+        { status: 200, headers },
+      );
     } catch (error) {
       console.error("Unexpected error:", error);
       return new Response(
@@ -158,15 +169,6 @@ serve(async (req) => {
         );
       }
     }
-
-    // 성공 응답
-    return new Response(
-      JSON.stringify({
-        success: true,
-        message: "Collect successful",
-      }),
-      { status: 200, headers },
-    );
   } catch (error) {
     console.error("Unexpected error:", error);
     return new Response(

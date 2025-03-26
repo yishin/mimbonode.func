@@ -40,10 +40,10 @@ serve(async (req) => {
 
     //
     const { user, profile, wallet, settings } = authResult;
-    console.log("user_id:" + JSON.stringify(user.id));
+    console.log(`user_id: ${profile.username} (${user.id})`);
 
     // 요청 데이터 파싱 : 없음
-    const { fullname, feeding } = await req.json();
+    const { fullname, feeding, last_check_usdt } = await req.json();
 
     if (fullname) {
       const { data, error } = await supabase
@@ -73,6 +73,13 @@ serve(async (req) => {
           { status: 200, headers },
         );
       }
+    }
+
+    if (last_check_usdt) {
+      const { data, error } = await supabase
+        .from("profiles")
+        .update({ last_check_usdt: last_check_usdt })
+        .eq("user_id", user.id);
     }
 
     // 성공 응답
