@@ -28,23 +28,42 @@ serve(async (req) => {
     return new Response(null, { status: 200, headers });
   }
 
+  // 사용자 인증
+  const authResult = await authenticateRequest(req);
+  if (authResult.error) {
+    return new Response(
+      JSON.stringify({ error: authResult.error }),
+      {
+        status: authResult.status,
+        headers,
+      },
+    );
+  }
+
+  //
+  const { user, profile, wallet, settings } = authResult;
+  console.log(`user_id: ${profile.username} (${user.id})`);
+
+  // 채굴 시작 시 락 획득 시도
+  const { data: lockAcquired, error: lockError } = await supabase
+    .rpc("acquire_harvesting_lock", { user_id_param: user.id });
+
+  if (lockError) {
+    console.error("Error acquiring harvesting lock:", lockError);
+    return new Response(
+      JSON.stringify({ error: "Internal server error" }),
+      { status: 500, headers },
+    );
+  }
+
+  if (!lockAcquired) {
+    return new Response(
+      JSON.stringify({ error: "Harvesting already in progress" }),
+      { status: 429, headers },
+    );
+  }
+
   try {
-    // 사용자 인증
-    const authResult = await authenticateRequest(req);
-    if (authResult.error) {
-      return new Response(
-        JSON.stringify({ error: authResult.error }),
-        {
-          status: authResult.status,
-          headers,
-        },
-      );
-    }
-
-    //
-    const { user, profile, wallet, settings } = authResult;
-    console.log(`user_id: ${profile.username} (${user.id})`);
-
     // 요청 데이터 파싱 : 없음
     const { user_id, elapsedSeconds } = await req.json();
     const matchingBonus = profile.matching_bonus;
@@ -529,5 +548,8 @@ serve(async (req) => {
       JSON.stringify({ error: "Internal server error" }),
       { status: 500, headers },
     );
+  } finally {
+    // 락 해제
+    await supabase.rpc("release_harvesting_lock", { user_id_param: user.id });
   }
 });
