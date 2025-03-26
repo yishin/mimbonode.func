@@ -43,7 +43,7 @@ serve(async (req) => {
 
     //
     const { user, profile, wallet, settings } = authResult;
-    console.log("user_id:" + JSON.stringify(user.id));
+    console.log(`user_id: ${profile.username} (${user.id})`);
 
     // 요청 데이터 파싱 : 없음
     const { user_id, elapsedSeconds } = await req.json();
@@ -109,7 +109,7 @@ serve(async (req) => {
       return sum;
     }, 0); // 총 채굴력
 
-    const feeAmount = parseFloat(settings.harvest_fee);
+    const feeAmount = parseFloat(settings.harvest_fee || 0);
     let toMiningAmount = totalMiningPower * secondsDiff + remainMatchingBonus; // 총 채굴할 량 = 총 채굴력 * 채굴 시간 + 남은 매칭보너스
 
     if (toMiningAmount <= 0) {
@@ -117,18 +117,6 @@ serve(async (req) => {
         JSON.stringify({ error: "Mining amount error" }),
         { status: 200, headers },
       );
-    }
-
-    // 프로필에 마지막 채굴 시간 업데이트하여 중복 채굴 방지
-    const { data: updateProfile, error: updateProfileError } = await supabase
-      .from("profiles")
-      .update({
-        last_harvest: currentTime,
-      })
-      .eq("user_id", profile.user_id);
-
-    if (updateProfileError) {
-      console.error("Update profile error:", updateProfileError.message);
     }
 
     // 1. 토큰 전송 전에 노드별 채굴 (우선 마이닝만)
@@ -273,21 +261,36 @@ serve(async (req) => {
 
     // 수수료 전송
     let feeTxHash = "";
-    const feeResult = await sendMgg(
-      settings.wallet_reward,
-      settings.wallet_fee,
-      feeAmount.toString(),
-    );
-    if (feeResult.error) {
-      console.error("Error sending MGG:", result.error);
-      return new Response(
-        JSON.stringify({ error: result.error || "Internal server error" }),
-        { status: 200, headers },
+    if (feeAmount > 0) {
+      const feeResult = await sendMgg(
+        settings.wallet_reward,
+        settings.wallet_fee,
+        feeAmount.toString(),
       );
+      if (feeResult.error) {
+        console.error("Error sending MGG:", result.error);
+        return new Response(
+          JSON.stringify({ error: result.error || "Internal server error" }),
+          { status: 200, headers },
+        );
+      }
+
+      feeTxHash = feeResult.txHash;
     }
 
-    feeTxHash = feeResult.txHash;
+    // 프로필에 마지막 채굴 시간 업데이트하여 중복 채굴 방지
+    const { data: updateProfile, error: updateProfileError } = await supabase
+      .from("profiles")
+      .update({
+        last_harvest: currentTime,
+      })
+      .eq("user_id", profile.user_id);
 
+    if (updateProfileError) {
+      console.error("Update profile error:", updateProfileError.message);
+    }
+
+    ////////////////////////////////////////////////////////////////
     // profit 변수 정의
     const profit = transferAmount;
 
