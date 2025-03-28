@@ -179,7 +179,7 @@ Deno.serve(async (req) => {
       if (sid > 1000) {
         console.log("사용자 지갑생성");
         // 사용자 지갑 생성 및 저장
-        walletAddress = await hdWallet.createAndSaveWallet(user.id);
+        walletAddress = await hdWallet.createAndSaveWallet(user_id);
       } else {
         console.log("관리자 지갑 생성");
 
