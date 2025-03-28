@@ -308,6 +308,22 @@ serve(async (req) => {
       feeTxHash = feeResult.txHash;
     }
 
+    // 매칭 보너스 기록 로그
+    try {
+      await supabase.from("debug_logs").insert({
+        function_name: "harvest",
+        message: "mining",
+        data: {
+          user_id: user.id,
+          username: profile.username,
+          amount: transferAmount,
+          fee_amount: feeAmount,
+        },
+      });
+    } catch (logError) {
+      console.error("Error logging start:", logError);
+    }
+
     // 프로필에 마지막 채굴 시간 업데이트하여 중복 채굴 방지
     const { data: updateProfile, error: updateProfileError } = await supabase
       .from("profiles")
