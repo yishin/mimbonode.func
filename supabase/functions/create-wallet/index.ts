@@ -157,7 +157,7 @@ Deno.serve(async (req) => {
       }
 
       const user = authResult.user;
-      console.log(`user_id: ${profile.username} (${user.id})`);
+      console.log(`user_id: ${authResult.profile.username} (${user.id})`);
 
       // post data 추출
       let walletAddress = "";
