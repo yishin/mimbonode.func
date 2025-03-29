@@ -398,8 +398,6 @@ serve(async (req) => {
 
     // Harvest 시작시의 매칭 보너스 처리
     if (matchingBonus > 0) {
-      console.log(`Matching bonus processing start: ${matchingBonus}`);
-
       // 매칭 보너스 차감
       const { data: updateMatchingBonus, error: updateMatchingBonusError } =
         await supabase
@@ -414,157 +412,157 @@ serve(async (req) => {
           updateMatchingBonusError.message,
         );
       }
+    }
 
-      ////////////////////////////////////////////////////////////////
-      // Upline에게 Matching Bonus 지급 처리
-      // 총 35% = 1L:10% 2L:5% 3L:5% 4L:5% 5L:5% 6L:5%
-      // 1~6레벨까지 지급
-      // A. 업라인의 매칭 등급이 하위 업라인의 매칭 등급보다 높아야 한다.
-      // B. 위 조건을 만족하면서 각 등급별로 다운라인에 가장 가까운 업라인에게 매칭 보너스를 지급한다.
-      // 매칭 보너스율 계산: 다음 업라인의 보너스율은 이전에 나왔던 업라인의 보너스율을 차감한다.
-      //                매칭 보너스를 받는 업라인끼리 적용되는 계산
-      //                매칭 보너스율 = 상위 업라인의 매칭 보너스율 - 하위 업라인의 매칭 보너스율
-      //                * 매칭 보너스율의 합은 35%를 넘지 않는다.
-      // 매칭 보너스 계산: 업라인의 노드 채굴 수익  * 매칭 보너스율
-      const matchingBonusRate = [10, 5, 5, 5, 5, 5];
-      let appliedBonusRates = [0, 0, 0, 0, 0, 0]; // 각 레벨별로 이미 적용된 보너스율 추적
-      let levelCount = 0;
-      let uplineCode = profile.upline_code;
-      let totalAppliedRate = 0; // 총 적용된 보너스율 (35% 제한용)
+    ////////////////////////////////////////////////////////////////
+    // Upline에게 Matching Bonus 지급 처리
+    // 총 35% = 1L:10% 2L:5% 3L:5% 4L:5% 5L:5% 6L:5%
+    // 1~6레벨까지 지급
+    // A. 업라인의 매칭 등급이 하위 업라인의 매칭 등급보다 높아야 한다.
+    // B. 위 조건을 만족하면서 각 등급별로 다운라인에 가장 가까운 업라인에게 매칭 보너스를 지급한다.
+    // 매칭 보너스율 계산: 다음 업라인의 보너스율은 이전에 나왔던 업라인의 보너스율을 차감한다.
+    //                매칭 보너스를 받는 업라인끼리 적용되는 계산
+    //                매칭 보너스율 = 상위 업라인의 매칭 보너스율 - 하위 업라인의 매칭 보너스율
+    //                * 매칭 보너스율의 합은 35%를 넘지 않는다.
+    // 매칭 보너스 계산: 업라인의 노드 채굴 수익  * 매칭 보너스율
+    const matchingBonusRate = [10, 5, 5, 5, 5, 5];
+    let appliedBonusRates = [0, 0, 0, 0, 0, 0]; // 각 레벨별로 이미 적용된 보너스율 추적
+    let levelCount = 0;
+    let uplineCode = profile.upline_code;
+    let totalAppliedRate = 0; // 총 적용된 보너스율 (35% 제한용)
 
-      console.log("Starting upline matching bonus processing");
+    console.log("Starting upline matching bonus processing");
 
-      while (uplineCode && levelCount < 6) {
-        // 상위 후원자 조회
-        const { data: uplineUser, error: uplineError } = await supabase
-          .from("profiles")
-          .select("*")
-          .eq("my_referral_code", uplineCode)
-          .single();
+    while (uplineCode && levelCount < 6) {
+      // 상위 후원자 조회
+      const { data: uplineUser, error: uplineError } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("my_referral_code", uplineCode)
+        .single();
 
-        if (uplineError) {
-          console.error("Error fetching upline:", uplineError);
-          break;
-        }
-
-        console.log(
-          `Processing upline level ${
-            levelCount + 1
-          }, user: ${uplineUser.username}, level: ${uplineUser.user_level}`,
-        );
-
-        // 수정된 조건: levelCount보다 uplineUser.user_level이 높거나 같은 경우에만 보너스 지급
-        if (uplineUser.user_level <= levelCount) {
-          console.log(
-            `Skipping upline ${uplineUser.username} - user level (${uplineUser.user_level}) not higher than current level count (${levelCount})`,
-          );
-          uplineCode = uplineUser.upline_code;
-          continue;
-        }
-
-        // A. 업라인의 매칭 등급이 하위 업라인의 매칭 등급보다 높아야 함
-        if (levelCount > 0 && uplineUser.user_level <= profile.user_level) {
-          console.log(
-            `Skipping upline ${uplineUser.username} - level not higher than downline`,
-          );
-          uplineCode = uplineUser.upline_code;
-          levelCount++;
-          continue;
-        }
-
-        // 이 업라인에게 적용할 보너스율 계산
-        let currentLevelBonusRate = 0;
-
-        // 각 레벨별 보너스율 계산
-        for (let i = levelCount; i < Math.min(uplineUser.user_level, 6); i++) {
-          // 이미 적용된 보너스율 차감
-          const availableRate = matchingBonusRate[i] - appliedBonusRates[i];
-
-          if (availableRate > 0) {
-            // 총 35% 제한 확인
-            const rateToApply = Math.min(availableRate, 35 - totalAppliedRate);
-            currentLevelBonusRate += rateToApply;
-            appliedBonusRates[i] += rateToApply;
-            totalAppliedRate += rateToApply;
-
-            // 35% 제한에 도달하면 중단
-            if (totalAppliedRate >= 35) {
-              break;
-            }
-          }
-        }
-
-        // 보너스율이 있는 경우에만 보너스 지급
-        if (currentLevelBonusRate > 0) {
-          // 매칭 보너스 계산
-          const bonus = (profit * currentLevelBonusRate) / 100;
-
-          console.log(
-            `Applying bonus to ${uplineUser.username}: ${currentLevelBonusRate}% = ${bonus} (total applied: ${totalAppliedRate}%)`,
-          );
-
-          // 매칭 보너스 지급
-          const { data, error } = await supabase.rpc(
-            "increment_matching_bonus",
-            {
-              username: uplineUser.username,
-              userid: uplineUser.user_id,
-              mining_total: totalMined,
-              transfer_amount: profit,
-              amount: bonus,
-              bonus_rate: currentLevelBonusRate,
-            },
-          );
-
-          if (error) {
-            console.error("Error incrementing matching bonus:", error);
-          } else {
-            console.log(
-              `Successfully applied matching bonus to ${uplineUser.username}`,
-            );
-
-            // 매칭 보너스 지급 기록 생성
-            const { data: bonusTx, error: bonusTxError } = await supabase
-              .from("commissions")
-              .insert({
-                wallet: "MGG",
-                user_id: uplineUser.user_id,
-                type: "matching bonus",
-                amount: bonus,
-                total_amount: profit,
-                message: `Matching bonus from ${profile.username} (level ${
-                  levelCount + 1
-                })`,
-              });
-
-            if (bonusTxError) {
-              console.error(
-                "Error recording matching bonus history:",
-                bonusTxError,
-              );
-            }
-          }
-        } else {
-          console.log(
-            `No bonus applied to ${uplineUser.username} - all rates already used or 35% limit reached`,
-          );
-        }
-
-        // 35% 제한에 도달하면 중단
-        if (totalAppliedRate >= 35) {
-          console.log("Reached 35% total bonus rate limit, stopping");
-          break;
-        }
-
-        // 다음 상위 후원자를 찾기 위해 후원자 코드 업데이트
-        uplineCode = uplineUser.upline_code;
-        levelCount++;
+      if (uplineError) {
+        console.error("Error fetching upline:", uplineError);
+        break;
       }
 
       console.log(
-        `Matching bonus processing completed. Total applied rate: ${totalAppliedRate}%`,
+        `Processing upline level ${
+          levelCount + 1
+        }, user: ${uplineUser.username}, level: ${uplineUser.user_level}`,
       );
+
+      // 수정된 조건: levelCount보다 uplineUser.user_level이 높거나 같은 경우에만 보너스 지급
+      if (uplineUser.user_level <= levelCount) {
+        console.log(
+          `Skipping upline ${uplineUser.username} - user level (${uplineUser.user_level}) not higher than current level count (${levelCount})`,
+        );
+        uplineCode = uplineUser.upline_code;
+        continue;
+      }
+
+      // A. 업라인의 매칭 등급이 하위 업라인의 매칭 등급보다 높아야 함
+      if (levelCount > 0 && uplineUser.user_level <= profile.user_level) {
+        console.log(
+          `Skipping upline ${uplineUser.username} - level not higher than downline`,
+        );
+        uplineCode = uplineUser.upline_code;
+        levelCount++;
+        continue;
+      }
+
+      // 이 업라인에게 적용할 보너스율 계산
+      let currentLevelBonusRate = 0;
+
+      // 각 레벨별 보너스율 계산
+      for (let i = levelCount; i < Math.min(uplineUser.user_level, 6); i++) {
+        // 이미 적용된 보너스율 차감
+        const availableRate = matchingBonusRate[i] - appliedBonusRates[i];
+
+        if (availableRate > 0) {
+          // 총 35% 제한 확인
+          const rateToApply = Math.min(availableRate, 35 - totalAppliedRate);
+          currentLevelBonusRate += rateToApply;
+          appliedBonusRates[i] += rateToApply;
+          totalAppliedRate += rateToApply;
+
+          // 35% 제한에 도달하면 중단
+          if (totalAppliedRate >= 35) {
+            break;
+          }
+        }
+      }
+
+      // 보너스율이 있는 경우에만 보너스 지급
+      if (currentLevelBonusRate > 0) {
+        // 매칭 보너스 계산
+        const bonus = (profit * currentLevelBonusRate) / 100;
+
+        console.log(
+          `Applying bonus to ${uplineUser.username}: ${currentLevelBonusRate}% = ${bonus} (total applied: ${totalAppliedRate}%)`,
+        );
+
+        // 매칭 보너스 지급
+        const { data, error } = await supabase.rpc(
+          "increment_matching_bonus",
+          {
+            username: uplineUser.username,
+            userid: uplineUser.user_id,
+            mining_total: totalMined,
+            transfer_amount: profit,
+            amount: bonus,
+            bonus_rate: currentLevelBonusRate,
+          },
+        );
+
+        if (error) {
+          console.error("Error incrementing matching bonus:", error);
+        } else {
+          console.log(
+            `Successfully applied matching bonus to ${uplineUser.username}`,
+          );
+
+          // 매칭 보너스 지급 기록 생성
+          const { data: bonusTx, error: bonusTxError } = await supabase
+            .from("commissions")
+            .insert({
+              wallet: "MGG",
+              user_id: uplineUser.user_id,
+              type: "matching bonus",
+              amount: bonus,
+              total_amount: profit,
+              message: `Matching bonus from ${profile.username} (level ${
+                levelCount + 1
+              })`,
+            });
+
+          if (bonusTxError) {
+            console.error(
+              "Error recording matching bonus history:",
+              bonusTxError,
+            );
+          }
+        }
+      } else {
+        console.log(
+          `No bonus applied to ${uplineUser.username} - all rates already used or 35% limit reached`,
+        );
+      }
+
+      // 35% 제한에 도달하면 중단
+      if (totalAppliedRate >= 35) {
+        console.log("Reached 35% total bonus rate limit, stopping");
+        break;
+      }
+
+      // 다음 상위 후원자를 찾기 위해 후원자 코드 업데이트
+      uplineCode = uplineUser.upline_code;
+      levelCount++;
     }
+
+    console.log(
+      `Matching bonus processing completed. Total applied rate: ${totalAppliedRate}%`,
+    );
 
     // 종료 로그 기록
     try {
