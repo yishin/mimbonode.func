@@ -68,6 +68,7 @@ serve(async (req) => {
   }
 
   if (!lockAcquired) {
+    console.log("Harvesting already in progress");
     return new Response(
       JSON.stringify({ error: "Harvesting already in progress" }),
       { status: 429, headers },
@@ -87,19 +88,13 @@ serve(async (req) => {
     const timeDiff = currentTime.getTime() - lastHarvestTime.getTime();
     const secondsDiff = Math.floor(timeDiff / 1000);
 
-    if (secondsDiff < settings.mining_cooltime) {
-      return new Response(
-        JSON.stringify({ error: "Mining cooltime error" }),
-        { status: 200, headers },
-      );
-    }
-
     console.log(
       "Server Seconds: " + secondsDiff,
       "Client Seconds: " + elapsedSeconds,
     );
 
     if (secondsDiff < settings.mining_cooltime) {
+      console.error("Mining cooltime error");
       return new Response(
         JSON.stringify({ error: "Mining cooltime error" }),
         { status: 200, headers },
@@ -143,6 +138,7 @@ serve(async (req) => {
     let toMiningAmount = totalMiningPower * secondsDiff + remainMatchingBonus; // 총 채굴할 량 = 총 채굴력 * 채굴 시간 + 남은 매칭보너스
 
     if (toMiningAmount <= 0) {
+      console.error("Mining amount error");
       return new Response(
         JSON.stringify({ error: "Mining amount error" }),
         { status: 200, headers },
