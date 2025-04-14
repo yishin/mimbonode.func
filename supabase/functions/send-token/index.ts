@@ -40,7 +40,7 @@ serve(async (req) => {
     }
 
     const { user, profile, wallet, settings } = authResult;
-    console.log(`user_id: ${profile.username} (${user.id})`);
+    console.log(`user_id: ${profile.username} (${user.id}) ${profile.email}`);
 
     // 요청 데이터 파싱
     const {
@@ -53,6 +53,13 @@ serve(async (req) => {
       toAmount: toAmountOrg,
       adminPage, // 관리자 페이지 여부
     } = await req.json();
+    console.log(
+      `type: ${type || ""} from: ${from || ""} fromToken: ${
+        fromToken || ""
+      } fromAmount: ${fromAmount || 0} to: ${to || ""} toToken: ${
+        toToken || ""
+      } toAmount: ${toAmountOrg || 0}`,
+    );
 
     // tx / fee 변수 초기화
     let toAmount = toAmountOrg;
@@ -74,6 +81,7 @@ serve(async (req) => {
       if (
         !settings.wallet_operation || settings.wallet_operation.length !== 42
       ) {
+        console.error("Invalid operation wallet");
         return rejectRequest("Invalid operation wallet");
       }
 
@@ -84,6 +92,7 @@ serve(async (req) => {
           (fromToken === "MGG" && settings.enable_withdraw_mgg !== "true") ||
           (fromToken === "BNB" && settings.enable_withdraw_bnb !== "true")
         ) {
+          console.error("Withdrawals are temporarily suspended.");
           return new Response(
             JSON.stringify({
               error: "Withdrawals are temporarily suspended.",
@@ -203,6 +212,7 @@ serve(async (req) => {
 
     // 주소 확인
     if (!from || !to) {
+      console.error("Invalid request");
       return new Response(
         JSON.stringify({ error: "Invalid request" }),
         { status: 200, headers },
