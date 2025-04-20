@@ -421,11 +421,25 @@ serve(async (req) => {
     //                매칭 보너스율 = 상위 업라인의 매칭 보너스율 - 하위 업라인의 매칭 보너스율
     //                * 매칭 보너스율의 합은 35%를 넘지 않는다.
     // 매칭 보너스 계산: 업라인의 노드 채굴 수익  * 매칭 보너스율
-    const matchingBonusRate = [10, 5, 5, 5, 5, 5];
+    let matchingBonusRate = [];
     let appliedBonusRates = [0, 0, 0, 0, 0, 0]; // 각 레벨별로 이미 적용된 보너스율 추적
-    let levelCount = 0;
+    let levelCount = profile.user_level;
     let uplineCode = profile.upline_code;
     let totalAppliedRate = 0; // 총 적용된 보너스율 (35% 제한용)
+
+    if (profile.user_level == 0) {
+      matchingBonusRate = [10, 5, 5, 5, 5, 5];
+    } else if (profile.user_level == 1) {
+      matchingBonusRate = [0, 15, 5, 5, 5, 5];
+    } else if (profile.user_level == 2) {
+      matchingBonusRate = [0, 0, 20, 5, 5, 5];
+    } else if (profile.user_level == 3) {
+      matchingBonusRate = [0, 0, 0, 25, 5, 5];
+    } else if (profile.user_level == 4) {
+      matchingBonusRate = [0, 0, 0, 0, 30, 5];
+    } else if (profile.user_level == 5) {
+      matchingBonusRate = [0, 0, 0, 0, 0, 35];
+    }
 
     console.log("Starting upline matching bonus processing");
 
