@@ -35,3 +35,6 @@ supabase/.branches/*
 supabase/.temp/*
 supabase/.temp/cli-latest
 deno.lock
+
+# Cursor
+.cursor/mcp.json
