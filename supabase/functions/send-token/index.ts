@@ -15,7 +15,7 @@ import {
 } from "../utils/tokenUtils.ts";
 import { setCorsHeaders } from "../utils/corsUtils.ts";
 import { authenticateRequest } from "../utils/authUtils.ts";
-import { rotl } from "https://esm.sh/@noble/hashes@1.4.0/utils.js";
+import { sendTelegramMessage } from "../utils/telegramUtils.ts";
 
 // Edge Function 시작
 serve(async (req) => {
@@ -41,6 +41,12 @@ serve(async (req) => {
 
     const { user, profile, wallet, settings } = authResult;
     console.log(`user_id: ${profile.username} (${user.id}) ${profile.email}`);
+
+    // 송금 막기 (임시 처리)
+    // return new Response(
+    //   JSON.stringify({ error: "Server maintenance" }),
+    //   { status: 400, headers },
+    // );
 
     // 요청 데이터 파싱
     const {
@@ -268,11 +274,16 @@ serve(async (req) => {
           feeAmount = fromAmount * settings.transfer_fee_rate_mgg /
             100;
           toAmount = fromAmount - feeAmount;
-          // mgg 전송
-          const result = await sendMgg(fromAddress, toAddress, toAmount);
-          txHash = result.txHash;
 
-          if (!isAdmin) {
+          if (isAdmin && adminPage) {
+            // 관리자 전송
+            const result = await sendMgg(fromAddress, toAddress, fromAmount);
+            txHash = result.txHash;
+          } else {
+            // mgg 전송
+            const result = await sendMgg(fromAddress, toAddress, toAmount);
+            txHash = result.txHash;
+
             // 관리자외 수수료 처리
             const feeResult = await sendMgg(
               fromAddress,
@@ -507,6 +518,25 @@ serve(async (req) => {
 
         // 전송 성공 회신
         if (txHash) {
+          const typeText = type === "TRANSFER"
+            ? "🔀 전송"
+            : type === "SWAP"
+            ? "🔄 스왑"
+            : type === "WITHDRAW"
+            ? "✈️ 출금"
+            : type === "DEPOSIT"
+            ? "💰 입금"
+            : "ℹ️ 기타";
+
+          const message = `━━━━━━━━━━━━━━━\n${typeText}${
+            from === to ? from : ""
+          }\nFrom: ${
+            (to !== from) ? (from ? from : fromAddress) : ""
+          }\n${fromToken} ${fromAmount}\nTo: ${
+            (to !== from) ? (to ? to : toAddress) : ""
+          }\n${toToken} ${toAmount}`;
+          await sendTelegramMessage(message);
+
           return new Response(
             JSON.stringify({
               success: true,

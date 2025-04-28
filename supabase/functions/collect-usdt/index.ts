@@ -21,6 +21,7 @@ import {
 } from "../utils/tokenUtils.ts";
 import { setCorsHeaders } from "../utils/corsUtils.ts";
 import { authenticateRequest } from "../utils/authUtils.ts";
+import { sendTelegramMessage } from "../utils/telegramUtils.ts";
 
 // Edge Function 시작
 serve(async (req) => {
@@ -120,6 +121,12 @@ serve(async (req) => {
       }
 
       console.log("Success collect_usdt:" + balance);
+
+      // 텔레그램 메시지 전송
+      const message =
+        `━━━━━━━━━━━━━━━\n💰 입금 ${profile.username}\nUSDT ${balance}`;
+      await sendTelegramMessage(message);
+
       // 성공 응답
       return new Response(
         JSON.stringify({
