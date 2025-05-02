@@ -519,13 +519,13 @@ serve(async (req) => {
         // 전송 성공 회신
         if (txHash) {
           const typeText = type === "TRANSFER"
-            ? "🔀 전송"
+            ? "🔀 내부 이체"
             : type === "SWAP"
-            ? "🔄 스왑"
+            ? "🔄 스왑 "
             : type === "WITHDRAW"
-            ? "✈️ 출금"
+            ? "✈️ 외부 출금"
             : type === "DEPOSIT"
-            ? "💰 입금"
+            ? "💰 외부 입금"
             : "ℹ️ 기타";
 
           const message = `━━━━━━━━━━━━━━━\n${typeText}${

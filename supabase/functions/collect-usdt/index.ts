@@ -124,7 +124,7 @@ serve(async (req) => {
 
       // 텔레그램 메시지 전송
       const message =
-        `━━━━━━━━━━━━━━━\n💰 입금 ${profile.username}\nUSDT ${balance}`;
+        `━━━━━━━━━━━━━━━\n💰 외부 입금 ${profile.username}\nUSDT ${balance}`;
       await sendTelegramMessage(message);
 
       // 성공 응답
