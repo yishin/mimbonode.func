@@ -40,9 +40,14 @@ serve(async (req) => {
     );
   }
 
+  // 사용자 ip 조회
+  const ip = req.headers.get("cf-connecting-ip");
+
   //
   const { user, profile, wallet, settings } = authResult;
-  console.log(`user_id: ${profile.username} (${user.id})`);
+  console.log(
+    `🚀 user_id: ${profile.username} (${user.id}) ${ip}`,
+  );
 
   // 시작 로그 기록
   try {
@@ -56,30 +61,118 @@ serve(async (req) => {
   }
 
   // 채굴 시작 시 락 획득 시도
-  const { data: lockAcquired, error: lockError } = await supabase
-    .rpc("acquire_harvesting_lock", { user_id_param: user.id });
+  // const { data: lockAcquired, error: lockError } = await supabase
+  //   .rpc("acquire_harvesting_lock", { user_id_param: user.id });
 
-  if (lockError) {
-    console.error("Error acquiring harvesting lock:", lockError);
-    return new Response(
-      JSON.stringify({ error: "Internal server error" }),
-      { status: 500, headers },
-    );
-  }
+  // if (lockError) {
+  //   console.error("Error acquiring harvesting lock:", lockError);
+  //   return new Response(
+  //     JSON.stringify({ error: "Internal server error" }),
+  //     { status: 500, headers },
+  //   );
+  // }
 
-  if (!lockAcquired) {
-    console.log("Harvesting already in progress");
-    return new Response(
-      JSON.stringify({ error: "Harvesting already in progress" }),
-      { status: 429, headers },
-    );
-  }
+  // if (!lockAcquired) {
+  //   console.log("Harvesting already in progress");
+  //   return new Response(
+  //     JSON.stringify({ error: "Harvesting already in progress" }),
+  //     { status: 429, headers },
+  //   );
+  // }
 
   try {
     // 요청 데이터 파싱 : 없음
     const { user_id, elapsedSeconds } = await req.json();
     const matchingBonus = profile.matching_bonus;
 
+    // 요청 사용자 검증
+    if (user.id !== user_id) {
+      console.error("User ID mismatch");
+      return new Response(
+        JSON.stringify({ error: "User ID mismatch" }),
+        { status: 401, headers },
+      );
+    }
+
+    // 중복 방지를 위해 harvests 테이블에 요청 기록 생성
+    try {
+      // 먼저 1시간 이내 FAILED 상태의 이전 요청이 있는지 확인
+      const { data: existingError, error: errorCheckError } = await supabase
+        .from("harvests")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("status", "FAILED")
+        .eq("request_group", Math.floor(Date.now() / 1000 / 3600))
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      if (existingError && existingError.length > 0) {
+        // 이전 ERROR 레코드 업데이트
+        await supabase
+          .from("harvests")
+          .update({
+            status: "HARVESTING",
+            elapsed_seconds: elapsedSeconds,
+            data: {
+              ...existingError[0].data,
+              retry_time: new Date().toISOString(),
+              retry_count: ((existingError[0].data || {}).retry_count || 0) + 1,
+            },
+          })
+          .eq("id", existingError[0].id);
+
+        console.log(
+          "Updated existing error record for retry:",
+          existingError[0].id,
+        );
+      } else {
+        // 1시간 이내 이전 요청이 없으면 새로운 요청 생성
+        const { data: harvestRequest, error: harvestError } = await supabase
+          .from("harvests")
+          .insert({
+            user_id: user.id,
+            username: profile.username,
+            elapsed_seconds: elapsedSeconds,
+            status: "HARVESTING",
+            data: {
+              device_info: req.headers.get("user-agent"),
+              client_time: new Date().toISOString(),
+            },
+          })
+          .select()
+          .single();
+
+        if (harvestError) {
+          // 유니크 제약 위반 (23505)인 경우 = 1시간 이내 중복 요청
+          if (harvestError.code === "23505") {
+            console.log("Duplicate harvest request detected");
+            return new Response(
+              JSON.stringify({
+                error:
+                  "Rate limit exceeded. Please wait at least 1 hour between harvest requests.",
+              }),
+              { status: 429, headers },
+            );
+          }
+
+          // 다른 에러인 경우
+          console.error("Error creating harvest record:", harvestError);
+          return new Response(
+            JSON.stringify({ error: "Failed to process harvest request" }),
+            { status: 500, headers },
+          );
+        }
+        console.log("Harvest request created:", harvestRequest.id);
+      }
+    } catch (dbError) {
+      console.error("Database error:", dbError);
+      return new Response(
+        JSON.stringify({ error: "Internal server error" }),
+        { status: 500, headers },
+      );
+    }
+
+    ////////////////////////////////
     // 현재 시간 가져오기
     const currentTime = new Date();
 
@@ -585,8 +678,53 @@ serve(async (req) => {
       console.error("Error logging end:", logError);
     }
 
+    // 성공적인 harvest 결과를 테이블에 업데이트
+    try {
+      const harvestData = {
+        mining_power: totalMiningPower,
+        seconds_diff: secondsDiff,
+        elapsed_seconds: elapsedSeconds,
+        total_mined: totalMined,
+        packages_info: myPackages.map((pkg) => ({
+          id: pkg.id,
+          name: pkg.name,
+          mining_amount: pkg.miningAmount || 0,
+          total_mined: pkg.total_mined,
+          max_out: pkg.max_out,
+        })),
+        matching_bonus_processed: {
+          start_amount: matchingBonus,
+          used_amount: usedMatchingBonus,
+          remain_amount: matchingBonus - usedMatchingBonus,
+        },
+      };
+
+      const { data: updatedHarvest, error: updateError } = await supabase
+        .from("harvests")
+        .update({
+          harvest_amount: profit,
+          fee_amount: feeAmount,
+          matching_bonus_used: usedMatchingBonus,
+          tx_hash: result.txHash,
+          fee_tx_hash: feeTxHash,
+          status: "COMPLETED",
+          data: harvestData,
+          processed_at: currentTime.toISOString(),
+        })
+        .eq("user_id", user.id)
+        .eq("status", "HARVESTING")
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      if (updateError) {
+        console.error("Error updating harvest record:", updateError);
+      }
+    } catch (dbError) {
+      console.error("Database error while updating harvest:", dbError);
+    }
+
     // 성공 응답
-    console.log(`Harvest successful: ${user.id} ${profile.username}`);
+    console.log(`✅ Harvest successful: ${profile.username} (${user.id})`);
     return new Response(
       JSON.stringify({
         success: true,
@@ -598,13 +736,35 @@ serve(async (req) => {
       { status: 200, headers },
     );
   } catch (error) {
-    console.error("Unexpected error:", error);
+    console.error("🛑 Unexpected error:", error);
+
+    // 에러 발생 시 harvest 레코드 업데이트
+    try {
+      await supabase
+        .from("harvests")
+        .update({
+          status: "FAILED",
+          data: {
+            error_message: error.message || "Unknown error",
+            error_stack: error.stack,
+            error_time: new Date().toISOString(),
+          },
+          processed_at: new Date().toISOString(),
+        })
+        .eq("user_id", user.id)
+        .eq("status", "HARVESTING")
+        .order("created_at", { ascending: false })
+        .limit(1);
+    } catch (dbError) {
+      console.error("Error updating failed harvest record:", dbError);
+    }
+
     return new Response(
       JSON.stringify({ error: "Internal server error" }),
       { status: 500, headers },
     );
   } finally {
     // 락 해제
-    await supabase.rpc("release_harvesting_lock", { user_id_param: user.id });
+    // await supabase.rpc("release_harvesting_lock", { user_id_param: user.id });
   }
 });

@@ -313,7 +313,7 @@ export async function sendBnb(
       signedTx1.rawTransaction,
     );
     console.log(
-      `✅ Step 1 완료: 운영자 지갑이 fromAddress(${fromAddress})에 가스비 전송 완료`,
+      `🔋 Send gas fee: ${fromAddress}`,
     );
 
     // ✅ Step 2: fromAddress가 toAddress로 BNB 전송
@@ -334,7 +334,7 @@ export async function sendBnb(
       signedTx2.rawTransaction,
     );
     console.log(
-      `✅ Step 2 완료: fromAddress(${fromAddress}) → toAddress(${toAddress}) ${amount} BNB 전송 완료`,
+      `🔶 Send BNB: ${fromAddress} → ${toAddress} ${amount} BNB`,
     );
 
     return {
@@ -449,7 +449,7 @@ export async function sendMgg(
       );
       await web3.eth.sendSignedTransaction(signedGasTx.rawTransaction);
       console.log(
-        `✅ Gas fee sent: ${
+        `🔋 Gas fee sent: ${
           web3.utils.fromWei(neededGas.toString(), "ether")
         } BNB`,
       );
@@ -480,7 +480,7 @@ export async function sendMgg(
     }
 
     console.log(
-      `✅ MGG transfer complete: ${amount} MGG (${fromAddress} → ${toAddress})`,
+      `🚀 MGG transfer complete: ${amount} MGG (${fromAddress} → ${toAddress})`,
     );
 
     return {
@@ -587,7 +587,7 @@ export async function sendUsdt(
       );
       await web3.eth.sendSignedTransaction(signedGasTx.rawTransaction);
       console.log(
-        `✅ Gas fee sent: ${
+        `🔋 Gas fee sent: ${
           web3.utils.fromWei(neededGas.toString(), "ether")
         } BNB`,
       );
@@ -618,7 +618,7 @@ export async function sendUsdt(
       throw new Error("Transaction failed");
     }
     console.log(
-      `✅ USDT transfer complete: ${amount} USDT (${fromAddress} → ${toAddress})`,
+      `💰 USDT transfer complete: ${amount} USDT (${fromAddress} → ${toAddress})`,
     );
 
     return {
