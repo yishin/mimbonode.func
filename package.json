@@ -2,7 +2,6 @@
   "name": "mimbonode.func",
   "version": "1.0.0",
   "main": "supabase/functions/create-wallet/index.js",
-  "author": "Chuck Shin <yishin71@gmail.com>",
   "license": "ISC",
   "private": true,
   "scripts": {
