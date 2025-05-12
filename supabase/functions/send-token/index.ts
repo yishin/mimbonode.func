@@ -84,6 +84,19 @@ serve(async (req) => {
     let fee = 0; // 수수료 전송 fee(bnb)
 
     ////////////////////////////////
+    // Block 체크
+    if (profile?.is_block) {
+      console.log("🚫 Blocked user");
+
+      return new Response(
+        JSON.stringify({
+          error: "Wrong request",
+        }),
+        { status: 500, headers },
+      );
+    }
+
+    ////////////////////////////////
     // 정책 확인
     const isAdmin = profile.user_role === "admin";
 
