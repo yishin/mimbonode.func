@@ -16,8 +16,6 @@ import {
 } from "../utils/tokenUtils.ts";
 import { setCorsHeaders } from "../utils/corsUtils.ts";
 import { authenticateRequest } from "../utils/authUtils.ts";
-import { min } from "https://esm.sh/@types/bn.js@5.1.6/index.js";
-import { toTwosComplement } from "https://esm.sh/web3-utils@1.10.0/types/index.js";
 
 // Edge Function 시작
 serve(async (req) => {
