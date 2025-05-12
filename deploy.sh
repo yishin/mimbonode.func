@@ -1,5 +1,6 @@
 #!/bin/bash
 # deploy.sh
+date +">>> %Y-%m-%d %H:%M:%S"
 
 # 환경에 따른 프로젝트 URL 설정
 if [ "$1" == "development" ] || [ "$1" == "local" ]; then
