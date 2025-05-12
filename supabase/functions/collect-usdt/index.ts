@@ -47,7 +47,7 @@ serve(async (req) => {
 
     // 사용자 정보 조회
     const { user, profile, wallet, settings } = authResult;
-    console.log(`user_id: ${profile.username} (${user.id})`);
+    console.log(`🚀 user_id: ${profile.username} (${user.id})`);
 
     // 요청 데이터 파싱 : 없음
     const { address, amount } = await req.json();

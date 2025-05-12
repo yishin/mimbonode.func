@@ -39,8 +39,14 @@ serve(async (req) => {
       );
     }
 
+    // 사용자 ip 조회
+    const ip = req.headers.get("cf-connecting-ip");
+
+    //
     const { user, profile, wallet, settings } = authResult;
-    console.log(`user_id: ${profile.username} (${user.id}) ${profile.email}`);
+    console.log(
+      `🚀 user_id: ${profile.username} (${user.id}) ${profile.email} ${ip}`,
+    );
 
     // 송금 막기 (임시 처리)
     // return new Response(

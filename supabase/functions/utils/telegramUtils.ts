@@ -27,10 +27,10 @@ export async function sendTelegramMessage(message: string) {
     );
 
     const result = await response.json();
-    console.log("Telegram message sent:", result);
+    console.log("💬 Telegram message sent:", result);
     return result;
   } catch (error) {
-    console.error("Error sending Telegram message:", error);
+    console.error("❌ Error sending Telegram message:", error);
     return null;
   }
 }

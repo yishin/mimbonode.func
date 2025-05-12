@@ -480,7 +480,7 @@ export async function sendMgg(
     }
 
     console.log(
-      `🚀 MGG transfer complete: ${amount} MGG (${fromAddress} → ${toAddress})`,
+      `✅ MGG transfer complete: ${amount} MGG (${fromAddress} → ${toAddress})`,
     );
 
     return {
