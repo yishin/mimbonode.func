@@ -60,6 +60,29 @@ serve(async (req) => {
     console.error("Error logging start:", logError);
   }
 
+  ////////////////////////////////
+  // Block 체크
+  if (profile?.is_block) {
+    console.log("🚫 Blocked user");
+
+    try {
+      await supabase.from("debug_logs").insert({
+        function_name: "harvest",
+        message: "Blocked user",
+        data: { user_id: user.id, username: profile.username },
+      });
+    } catch (logError) {
+      console.error("Error logging:", logError);
+    }
+
+    return new Response(
+      JSON.stringify({
+        error: "Wrong request",
+      }),
+      { status: 500, headers },
+    );
+  }
+
   // 채굴 시작 시 락 획득 시도
   // const { data: lockAcquired, error: lockError } = await supabase
   //   .rpc("acquire_harvesting_lock", { user_id_param: user.id });
@@ -146,6 +169,17 @@ serve(async (req) => {
           // 유니크 제약 위반 (23505)인 경우 = 1시간 이내 중복 요청
           if (harvestError.code === "23505") {
             console.log("Duplicate harvest request detected");
+
+            try {
+              await supabase.from("debug_logs").insert({
+                function_name: "harvest",
+                message: "Duplicate harvest request detected",
+                data: { user_id: user.id, username: profile.username },
+              });
+            } catch (logError) {
+              console.error("Error logging:", logError);
+            }
+
             return new Response(
               JSON.stringify({
                 error:
