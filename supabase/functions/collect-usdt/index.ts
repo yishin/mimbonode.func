@@ -50,13 +50,74 @@ serve(async (req) => {
     console.log(`🚀 user_id: ${profile.username} (${user.id})`);
 
     // 요청 데이터 파싱 : 없음
-    const { address, amount } = await req.json();
+    const requestData = await req.json();
+    const { address, amount } = requestData;
 
     // 검증
     if (address !== wallet.address) {
       return new Response(
         JSON.stringify({ error: "Invalid address" }),
         { status: 400, headers },
+      );
+    }
+
+    // collect-usdt 요청시 block 사용자는 체크하지 않는다.
+
+    ////////////////////////////////
+    // 중복 실행 방지
+    try {
+      // 30s 이내 이전 요청이 없으면 새로운 요청 생성
+      const { data: trxRequest, error: trxError } = await supabase
+        .from("trx_requests")
+        .insert({
+          user_id: user.id,
+          username: profile.username,
+          type: "DEPOSIT",
+          data: {
+            device_info: req.headers.get("user-agent"),
+            client_time: new Date().toISOString(),
+            ...requestData,
+          },
+        })
+        .select()
+        .single();
+
+      if (trxError) {
+        // 유니크 제약 위반 (23505)인 경우 = 30s 이내 중복 요청
+        if (trxError.code === "23505") {
+          console.log("Duplicate trx request detected");
+
+          try {
+            await supabase.from("debug_logs").insert({
+              function_name: "transactions",
+              message: "Duplicate request",
+              data: { user_id: user.id, username: profile.username },
+            });
+          } catch (logError) {
+            console.error("Error logging:", logError);
+          }
+
+          return new Response(
+            JSON.stringify({
+              error: "Rate limit exceeded.",
+            }),
+            { status: 429, headers },
+          );
+        }
+
+        // 다른 에러인 경우
+        console.error("Error creating trx record:", trxError);
+        return new Response(
+          JSON.stringify({ error: "Failed to process trx request" }),
+          { status: 500, headers },
+        );
+      }
+      console.log("trx request created:", trxRequest.id);
+    } catch (dbError) {
+      console.error("Database error:", dbError);
+      return new Response(
+        JSON.stringify({ error: "Internal server error" }),
+        { status: 500, headers },
       );
     }
 
