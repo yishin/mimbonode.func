@@ -55,6 +55,7 @@ serve(async (req) => {
     // );
 
     // 요청 데이터 파싱
+    const requestData = await req.json();
     const {
       type,
       from,
@@ -64,7 +65,7 @@ serve(async (req) => {
       toToken,
       toAmount: toAmountOrg,
       adminPage, // 관리자 페이지 여부
-    } = await req.json();
+    } = requestData;
     console.log(
       `type: ${type || ""} from: ${from || ""} fromToken: ${
         fromToken || ""
@@ -92,6 +93,87 @@ serve(async (req) => {
         JSON.stringify({
           error: "Wrong request",
         }),
+        { status: 500, headers },
+      );
+    }
+
+    ////////////////////////////////
+    // 사용자 검증
+    // if (profile.user_role !== "admin") { //  || user.is_super_admin !== true
+    //   // 사용자 검증
+    //   if (profile.username !== from) {
+    //   console.error("🚫 Invalid user");
+    //     return new Response(
+    //       JSON.stringify({ error: "Invalid user" }),
+    //       { status: 400, headers },
+    //     );
+    //   }
+    // }
+
+    ////////////////////////////////
+    // 비정상 요청 체크
+    // if (!validateRequest(requestData)) {
+    //
+    //   return new Response(
+    //     JSON.stringify({ error: "Invalid request" }),
+    //     { status: 400, headers },
+    //   );
+    // }
+
+    ////////////////////////////////
+    // 중복 실행 방지
+    try {
+      // 30s 이내 이전 요청이 없으면 새로운 요청 생성
+      const { data: trxRequest, error: trxError } = await supabase
+        .from("trx_requests")
+        .insert({
+          user_id: user.id,
+          username: profile.username,
+          type: type,
+          data: {
+            device_info: req.headers.get("user-agent"),
+            client_time: new Date().toISOString(),
+            ...requestData,
+          },
+        })
+        .select()
+        .single();
+
+      if (trxError) {
+        // 유니크 제약 위반 (23505)인 경우 = 30s 이내 중복 요청
+        if (trxError.code === "23505") {
+          console.log("Duplicate trx request detected");
+
+          try {
+            await supabase.from("debug_logs").insert({
+              function_name: "transactions",
+              message: "Duplicate request",
+              data: { user_id: user.id, username: profile.username },
+            });
+          } catch (logError) {
+            console.error("Error logging:", logError);
+          }
+
+          return new Response(
+            JSON.stringify({
+              error: "Too Many Requests",
+            }),
+            { status: 429, headers },
+          );
+        }
+
+        // 다른 에러인 경우
+        console.error("Error creating trx record:", trxError);
+        return new Response(
+          JSON.stringify({ error: "Failed to process trx request" }),
+          { status: 500, headers },
+        );
+      }
+      console.log("trx request created:", trxRequest.id);
+    } catch (dbError) {
+      console.error("Database error:", dbError);
+      return new Response(
+        JSON.stringify({ error: "Internal server error" }),
         { status: 500, headers },
       );
     }
@@ -405,53 +487,37 @@ serve(async (req) => {
         ////////////////////////////////
         if (fromToken === "USDT") {
           // USDT 출금 처리
-          if (
-            parseFloat(settings.withdraw_fee_usdt_per_10000) >
-              0
-          ) {
-            // 수수료 계산
-            const feePer10000 = parseFloat(
-              settings.withdraw_fee_usdt_per_10000,
-            );
-
-            // 10000 USDT 당 수수료 계산
-            const units = Math.floor(parseFloat(fromAmount) / 10000) + 1;
-
-            feeAmount = units * feePer10000;
-            toAmount = parseFloat(fromAmount) - feeAmount;
-          } else {
-            // 수수료 없음
-            feeAmount = 0;
-            toAmount = fromAmount;
-          }
-          // USDT 출금 처리 : 출금 지갑에서 수수료를 제외한 금액의 USDT를 출금한다.
-          // DB에서 사용자의 USDT 잔액에서 출금 금액의 USDT를 차감한다.
-          // 수수료 출금 : DB에서 사용자의 USDT 잔액에서 수수료를 차감한다.
-          const { data: updateUsdtBalance, error: updateUsdtBalanceError } =
-            await supabase
-              .rpc("decrease_usdt_balance", {
-                userid: user.id,
-                amount: parseFloat(fromAmount),
-              });
-          if (updateUsdtBalanceError) {
-            console.error(
-              "Error updating USDT balance:",
-              updateUsdtBalanceError,
-            );
-          }
-          // 토큰을 전송한다.
-          const result = await sendUsdt(
-            settings.wallet_withdraw,
-            toAddress,
-            toAmount,
-          );
-          if (result.success) {
+          if (isAdmin && adminPage) {
+            // 관리자 전송
+            const result = await sendUsdt(fromAddress, toAddress, fromAmount);
             txHash = result.txHash;
+            feeTxHash = result.feeTxHash;
           } else {
-            // 토큰 전송 실패시 잔액 복구
+            if (
+              parseFloat(settings.withdraw_fee_usdt_per_10000) >
+                0
+            ) {
+              // 수수료 계산
+              const feePer10000 = parseFloat(
+                settings.withdraw_fee_usdt_per_10000,
+              );
+
+              // 10000 USDT 당 수수료 계산
+              const units = Math.floor(parseFloat(fromAmount) / 10000) + 1;
+
+              feeAmount = units * feePer10000;
+              toAmount = parseFloat(fromAmount) - feeAmount;
+            } else {
+              // 수수료 없음
+              feeAmount = 0;
+              toAmount = fromAmount;
+            }
+            // USDT 출금 처리 : 출금 지갑에서 수수료를 제외한 금액의 USDT를 출금한다.
+            // DB에서 사용자의 USDT 잔액에서 출금 금액의 USDT를 차감한다.
+            // 수수료 출금 : DB에서 사용자의 USDT 잔액에서 수수료를 차감한다.
             const { data: updateUsdtBalance, error: updateUsdtBalanceError } =
               await supabase
-                .rpc("increment_usdt_balance", {
+                .rpc("decrease_usdt_balance", {
                   userid: user.id,
                   amount: parseFloat(fromAmount),
                 });
@@ -461,30 +527,60 @@ serve(async (req) => {
                 updateUsdtBalanceError,
               );
             }
-            return rejectRequest("Transaction failed");
+            // 토큰을 전송한다.
+            const result = await sendUsdt(
+              settings.wallet_withdraw,
+              toAddress,
+              toAmount,
+            );
+            if (result.success) {
+              txHash = result.txHash;
+            } else {
+              // 토큰 전송 실패시 잔액 복구
+              const { data: updateUsdtBalance, error: updateUsdtBalanceError } =
+                await supabase
+                  .rpc("increment_usdt_balance", {
+                    userid: user.id,
+                    amount: parseFloat(fromAmount),
+                  });
+              if (updateUsdtBalanceError) {
+                console.error(
+                  "Error updating USDT balance:",
+                  updateUsdtBalanceError,
+                );
+              }
+              return rejectRequest("Transaction failed");
+            }
           }
         } else if (fromToken === "MGG") {
           // mgg 출금
-          if (parseFloat(settings.withdraw_fee_rate_mgg) > 0) {
-            feeAmount = parseFloat(fromAmount) *
-              parseFloat(settings.withdraw_fee_rate_mgg) /
-              100;
-            toAmount = parseFloat(fromAmount) - feeAmount;
+          if (isAdmin && adminPage) {
+            // 관리자 전송
+            const result = await sendMgg(fromAddress, toAddress, fromAmount);
+            txHash = result.txHash;
+            feeTxHash = result.feeTxHash;
           } else {
-            feeAmount = 0;
-            toAmount = fromAmount;
-          }
-          const result = await sendMgg(fromAddress, toAddress, toAmount);
-          txHash = result.txHash;
+            if (parseFloat(settings.withdraw_fee_rate_mgg) > 0) {
+              feeAmount = parseFloat(fromAmount) *
+                parseFloat(settings.withdraw_fee_rate_mgg) /
+                100;
+              toAmount = parseFloat(fromAmount) - feeAmount;
+            } else {
+              feeAmount = 0;
+              toAmount = fromAmount;
+            }
+            const result = await sendMgg(fromAddress, toAddress, toAmount);
+            txHash = result.txHash;
 
-          // mgg fee 출금처리
-          if (parseFloat(settings.withdraw_fee_rate_mgg) > 0) {
-            const resultFee = await sendMgg(
-              fromAddress,
-              settings.wallet_fee,
-              feeAmount,
-            );
-            feeTxHash = resultFee.txHash;
+            // mgg fee 출금처리
+            if (parseFloat(settings.withdraw_fee_rate_mgg) > 0) {
+              const resultFee = await sendMgg(
+                fromAddress,
+                settings.wallet_fee,
+                feeAmount,
+              );
+              feeTxHash = resultFee.txHash;
+            }
           }
         } else if (fromToken === "BNB") {
           // bnb 출금
@@ -553,7 +649,7 @@ serve(async (req) => {
             (to !== from) ? (from ? from : fromAddress) : ""
           }\n${fromToken} ${fromAmount}\nTo: ${
             (to !== from) ? (to ? to : toAddress) : ""
-          }\n${toToken} ${toAmount}`;
+          }\n${toToken || ""} ${toAmount || ""}`;
           await sendTelegramMessage(message);
 
           return new Response(
