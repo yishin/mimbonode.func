@@ -180,8 +180,7 @@ serve(async (req) => {
 
             return new Response(
               JSON.stringify({
-                error:
-                  "Rate limit exceeded. Please wait at least 1 hour between harvest requests.",
+                error: "Rate limit exceeded.",
               }),
               { status: 429, headers },
             );
