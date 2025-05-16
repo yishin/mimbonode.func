@@ -87,15 +87,16 @@ serve(async (req) => {
         if (trxError.code === "23505") {
           console.log("Duplicate trx request detected");
 
-          try {
-            await supabase.from("debug_logs").insert({
-              function_name: "transactions",
-              message: "Duplicate request",
-              data: { user_id: user.id, username: profile.username },
-            });
-          } catch (logError) {
-            console.error("Error logging:", logError);
-          }
+          // collect-usdt에서는 중복 요청 로그 기록 하지 않음
+          // try {
+          //   await supabase.from("debug_logs").insert({
+          //     function_name: "collect-usdt",
+          //     message: "Duplicate request",
+          //     data: { user_id: user.id, username: profile.username },
+          //   });
+          // } catch (logError) {
+          //   console.error("Error logging:", logError);
+          // }
 
           return new Response(
             JSON.stringify({
