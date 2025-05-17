@@ -205,7 +205,7 @@ async function generateAndSendReport() {
       (sum: number, item: SalesItem) => sum + (Number(item.price) || 0),
       0,
     );
-    const dailyFeeAmount = dailyTotal * 0.02; // 2% 수수료
+    const dailyFeeAmount = dailyTotal * 0.03; // 3% 수수료
 
     const monthlyTotal = (monthlyData as SalesItem[]).reduce(
       (sum: number, item: SalesItem) => sum + (Number(item.price) || 0),
@@ -225,7 +225,7 @@ async function generateAndSendReport() {
 
 <b>어제 판매 현황:</b>
 총 판매액: ${dailyTotal.toLocaleString()} USDT
-2% 수수료: ${dailyFeeAmount.toLocaleString()} USDT
+3% 수수료: ${dailyFeeAmount.toLocaleString()} USDT
 판매 건수: ${dailyData.length}건
 `;
     // <b>2. 월별 판매 현황 (${monthlyPeriodTitle}):</b>
