@@ -211,13 +211,13 @@ async function generateAndSendReport() {
       (sum: number, item: SalesItem) => sum + (Number(item.price) || 0),
       0,
     );
-    const monthlyFeeAmount = monthlyTotal * 0.02; // 2% 수수료
+    const monthlyFeeAmount = monthlyTotal * 0.03; // 3% 수수료
 
     const grandTotal = (totalData as SalesItem[]).reduce(
       (sum: number, item: SalesItem) => sum + (Number(item.price) || 0),
       0,
     );
-    const grandTotalFeeAmount = grandTotal * 0.02; // 2% 수수료
+    const grandTotalFeeAmount = grandTotal * 0.03; // 3% 수수료
 
     // 메시지 생성 (날짜를 한국 시간으로 표시)
     const message = `
