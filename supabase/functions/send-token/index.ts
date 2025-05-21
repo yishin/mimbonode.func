@@ -15,6 +15,7 @@ import {
 } from "../utils/tokenUtils.ts";
 import { setCorsHeaders } from "../utils/corsUtils.ts";
 import { authenticateRequest } from "../utils/authUtils.ts";
+import { getBnbPriceFromBinance } from "../utils/exchangeUtils.ts";
 import { sendTelegramMessage } from "../utils/telegramUtils.ts";
 
 // Edge Function 시작
@@ -87,38 +88,53 @@ serve(async (req) => {
     ////////////////////////////////
     // Block 체크
     if (profile?.is_block) {
-      console.log("🚫 Blocked user");
+      console.log("🚫 Blocked user's request");
 
       return new Response(
         JSON.stringify({
           error: "Wrong request",
         }),
-        { status: 500, headers },
+        { status: 400, headers }, // bad request
       );
     }
 
     ////////////////////////////////
-    // 사용자 검증
-    // if (profile.user_role !== "admin") { //  || user.is_super_admin !== true
-    //   // 사용자 검증
-    //   if (profile.username !== from) {
-    //   console.error("🚫 Invalid user");
-    //     return new Response(
-    //       JSON.stringify({ error: "Invalid user" }),
-    //       { status: 400, headers },
-    //     );
-    //   }
-    // }
+    // 사용자 검증 (관리자 제외 - 다른 사용자의 금액을 회수하거나 운영지갑 운영 필요)
+    if (profile.user_role !== "admin") { // || user.is_super_admin !== true
+      // 사용자 검증
+      if (profile.user_id !== user.id) {
+        console.error("🚫 Invalid user");
+
+        // 사용자 차단
+        await blockUser(user.id, "Invalid user");
+
+        return new Response(
+          JSON.stringify({ error: "Invalid user" }),
+          { status: 400, headers },
+        );
+      }
+    }
 
     ////////////////////////////////
     // 비정상 요청 체크
-    // if (!validateRequest(requestData)) {
-    //
-    //   return new Response(
-    //     JSON.stringify({ error: "Invalid request" }),
-    //     { status: 400, headers },
-    //   );
-    // }
+    if (settings?.enable_transaction_validate_check === "true") {
+      const validateResult = validateRequest(requestData, settings);
+      if (!validateResult.validated) {
+        console.error(
+          `🚫 Invalid request: ${profile.username} ${
+            validateResult.reason || ""
+          }`,
+        );
+
+        // 사용자 차단
+        await blockUser(user.id, "Invalid user");
+
+        return new Response(
+          JSON.stringify({ error: "Invalid request" }),
+          { status: 400, headers },
+        );
+      }
+    }
 
     ////////////////////////////////
     // 중복 실행 방지
@@ -216,10 +232,14 @@ serve(async (req) => {
           numFromAmount < settings.minimum_withdraw_usdt) ||
         (type === "WITHDRAW" && fromToken === "MGG" &&
           numFromAmount < settings.minimum_withdraw_mgg) ||
+        (type === "WITHDRAW" && fromToken === "BNB" &&
+          numFromAmount < settings.minimum_withdraw_bnb) ||
         (type === "SWAP" && fromToken === "USDT" &&
           numFromAmount < settings.minimum_swap_usdt) ||
         (type === "SWAP" && fromToken === "MGG" &&
           numFromAmount < settings.minimum_swap_mgg) ||
+        (type === "SWAP" && fromToken === "BNB" &&
+          numFromAmount < settings.minimum_swap_mgg_to_bnb) ||
         (type === "TRANSFER" && fromToken === "USDT" &&
           numFromAmount < settings.minimum_transfer_usdt) ||
         (type === "TRANSFER" && fromToken === "MGG" &&
@@ -285,7 +305,7 @@ serve(async (req) => {
             if (insertError) {
               console.error("Error creating transaction record:", insertError);
               return new Response(
-                JSON.stringify({ error: "Request failed." }),
+                JSON.stringify({ error: "Request admin approval" }),
                 { status: 200, headers },
               );
             }
@@ -300,7 +320,7 @@ serve(async (req) => {
 
       // 스왑 정책 확인
       if (type === "SWAP") {
-        if (fromToken !== "MGG" || toToken !== "USDT") {
+        if (fromToken !== "MGG" || (toToken !== "USDT" && toToken !== "BNB")) {
           return rejectRequest("Invalid token pair");
         }
 
@@ -470,6 +490,82 @@ serve(async (req) => {
             console.error("Error updating wallet balance:", updateError);
             return rejectRequest("Failed to update wallet");
           }
+        } else if (fromToken === "MGG" && toToken === "BNB") {
+          // BNB 스왑 ////////////////////////////////
+
+          // BNB 가격 확인
+          const bnbPrice = await getBnbPriceFromBinance(); // 바이낸스 거래소에서 현재 가격 조회 : 650.00 USDT
+          if (bnbPrice === 0) {
+            return rejectRequest("Failed to get BNB price");
+          }
+
+          // mgg -> bnb 스왑
+          exchangeRate = parseFloat(settings.mgg_price_in_usdt); // tx 기록용
+          feeRate = parseFloat(settings.swap_fee_rate_mgg_to_bnb);
+          feeAmount = (parseFloat(fromAmount) * feeRate / 100)
+            .toFixed(8);
+          toAmount = parseFloat(
+            (parseFloat(fromAmount) - feeAmount) *
+              exchangeRate / bnbPrice,
+          ).toFixed(8);
+
+          // 0. 스왑 금액에 필요한 검증
+
+          // toAmount 금액이 맞는지 확인
+          // const toAmountVerified = parseFloat(
+          //   (parseFloat(fromAmount) - feeAmount) *
+          //     exchangeRate / bnbPrice,
+          // ).toFixed(8);
+          // if (String(toAmountVerified) !== String(toAmount)) {
+          //   return rejectRequest("Invalid amount");
+          // }
+
+          // MGG 잔액확인
+          const mggBalance = await getMggBalance(fromAddress);
+          if (parseFloat(fromAmount) > parseFloat(mggBalance)) {
+            return new Response(
+              JSON.stringify({ error: "Insufficient balance" }),
+              { status: 400, headers },
+            );
+          }
+          // 1. mgg 토큰을 운영지갑으로 전송 (전송금액)
+          const toSendAmount = parseFloat(fromAmount) - parseFloat(feeAmount);
+          const result = await sendMgg(
+            fromAddress,
+            settings.wallet_operation,
+            toSendAmount.toString(),
+          );
+          if (result.success) {
+            txHash = result.txHash;
+          } else {
+            return new Response(
+              JSON.stringify({ error: "Transaction failed" }),
+              { status: 400, headers },
+            );
+          }
+          // 2. 수수료 처리 (mgg를 수수료지갑으로 전송)
+          const feeResult = await sendMgg(
+            fromAddress,
+            settings.wallet_fee,
+            feeAmount.toString(),
+          );
+          feeTxHash = feeResult.txHash;
+
+          // 3. wallet.bnb_balance에 잔액을 더해주다
+          const { data: walletData, error: updateError } = await supabase
+            .rpc("increment_bnb_balance", {
+              userid: user.id,
+              amount: parseFloat(toAmount),
+            });
+
+          if (updateError) {
+            console.error("Error updating wallet balance:", updateError);
+            return rejectRequest("Failed to update wallet");
+          }
+
+          console.log(
+            `🔄 BNB 지급:${toAmount} BNB, 시세:${bnbPrice}`,
+          );
         } else {
           // MGG -> USDT 스왑이 아닌 경우
           return new Response(
@@ -493,6 +589,7 @@ serve(async (req) => {
             txHash = result.txHash;
             feeTxHash = result.feeTxHash;
           } else {
+            // 사용자 전송
             if (
               parseFloat(settings.withdraw_fee_usdt_per_10000) >
                 0
@@ -584,9 +681,66 @@ serve(async (req) => {
           }
         } else if (fromToken === "BNB") {
           // bnb 출금
-          const result = await sendBnb(fromAddress, toAddress, fromAmount);
-          txHash = result.txHash;
-          feeTxHash = result.feeTxHash;
+          if (isAdmin && adminPage) {
+            // 관리자 전송
+            const result = await sendBnb(fromAddress, toAddress, fromAmount);
+            txHash = result.txHash;
+            feeTxHash = result.feeTxHash;
+          } else {
+            // 사용자 전송
+            if (
+              parseFloat(settings.withdraw_fee_rate_bnb) >
+                0
+            ) {
+              feeAmount = parseFloat(fromAmount) *
+                parseFloat(settings.withdraw_fee_rate_bnb) /
+                100;
+              toAmount = parseFloat(fromAmount) - feeAmount;
+            } else {
+              // 수수료 없음
+              feeAmount = 0;
+              toAmount = fromAmount;
+            }
+            // BNB 출금 처리 : 출금 지갑에서 수수료를 제외한 금액의 BNB를 출금한다.
+            // DB에서 사용자의 BNB 잔액에서 출금 금액의 BNB를 차감한다.
+            // 수수료 출금 : DB에서 사용자의 BNB 잔액에서 수수료를 차감한다.
+            const { data: updateBnbBalance, error: updateBnbBalanceError } =
+              await supabase
+                .rpc("decrease_bnb_balance", {
+                  userid: user.id,
+                  amount: parseFloat(fromAmount),
+                });
+            if (updateBnbBalanceError) {
+              console.error(
+                "Error updating BNB balance:",
+                updateBnbBalanceError,
+              );
+            }
+            // 토큰을 전송한다.
+            const result = await sendBnb(
+              settings.wallet_withdraw,
+              toAddress,
+              toAmount,
+            );
+            if (result.success) {
+              txHash = result.txHash;
+            } else {
+              // 토큰 전송 실패시 잔액 복구
+              const { data: updateUsdtBalance, error: updateUsdtBalanceError } =
+                await supabase
+                  .rpc("increment_usdt_balance", {
+                    userid: user.id,
+                    amount: parseFloat(fromAmount),
+                  });
+              if (updateUsdtBalanceError) {
+                console.error(
+                  "Error updating USDT balance:",
+                  updateUsdtBalanceError,
+                );
+              }
+              return rejectRequest("Transaction failed");
+            }
+          }
         }
       } else {
         // 에러
@@ -691,4 +845,132 @@ function rejectRequest(reason?: string) {
     }),
     { status: 200 },
   );
+}
+
+async function blockUser(userId: string, reason: string) {
+  const { data: userData, error: userError } = await supabase
+    .from("profiles")
+    .update({ is_block: true, block_reason: reason })
+    .eq("user_id", userId);
+
+  if (userError) {
+    console.error("Error blocking user:", userError);
+
+    const { data: userData, error } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("user_id", userId)
+      .single();
+
+    await sendTelegramMessage(
+      `🚫 사용자 차단 실패: ${userData?.username}(${userId}) ${userError.message}`,
+    );
+    return;
+  }
+
+  await sendTelegramMessage(`🚫 사용자 차단: ${userData?.username} ${reason}`);
+}
+
+/**
+ * 요청 데이터 검증
+ * @param requestData 요청 데이터
+ * @returns 검증 결과, 이후 검증에 실패한 경우 사용자는 차단됨
+ *
+ * 검증 결과
+ * {
+ *   validated: boolean,
+ *   reason: string
+ * }
+ */
+
+function validateRequest(requestData: any, settings: any) {
+  const { type, from, to, fromToken, toToken, fromAmount, toAmount } =
+    requestData;
+
+  // 요청 데이터 검증
+  if (!from || !to || !fromToken || !fromAmount) { // !toToken, toAmount 은 출금시 null 가능
+    return { validated: false, reason: "Invalid request" };
+  }
+
+  // 공통 : 금액 데이터 검증
+  // 숫자 형식 검증
+  if (isNaN(parseFloat(fromAmount)) || isNaN(parseFloat(toAmount))) {
+    return { validated: false, reason: "Invalid amount" };
+  }
+  // 0 이상 검증
+  if (parseFloat(fromAmount) <= 0) {
+    return { validated: false, reason: "Invalid amount" };
+  }
+
+  // 0 이상 검증
+  if (parseFloat(toAmount) <= 0) {
+    return { validated: false, reason: "Invalid amount" };
+  }
+
+  ////////////////////////////////
+  // SWAP 요청 검증
+  if (type === "SWAP") {
+    // 토큰 쌍 검증
+    if (fromToken !== "MGG" || (toToken !== "USDT" && toToken !== "BNB")) {
+      return { validated: false, reason: "[SWAP] Invalid token pair" };
+    }
+
+    // 최소 스왑 금액 검증
+    if (
+      fromToken === "MGG" &&
+      parseFloat(fromAmount) < parseFloat(settings.minimum_swap_mgg)
+    ) {
+      return { validated: false, reason: "[SWAP] Minimum swap amount" };
+    }
+
+    // 스왑 금액 확인
+    const feeAmount = parseFloat(fromAmount) *
+      parseFloat(settings.swap_fee_rate_mgg) / 100;
+    const swapAmount = (parseFloat(fromAmount) - feeAmount) *
+      parseFloat(settings.mgg_price_in_usdt);
+    if (swapAmount !== parseFloat(toAmount)) {
+      return { validated: false, reason: "[SWAP] Maximum swap amount" };
+    }
+  }
+
+  ////////////////////////////////
+  // TRANSFER 요청 검증
+  if (type === "TRANSFER") {
+    // 토큰 쌍 검증
+    if (fromToken !== "MGG" && fromToken !== "USDT") {
+      return { validated: false, reason: "[TRANSFER] Invalid token pair" };
+    }
+
+    // 최소 전송 금액 확인
+    if (
+      (fromToken === "MGG" &&
+        (parseFloat(fromAmount) < parseFloat(settings.minimum_transfer_mgg))) ||
+      (fromToken === "USDT" &&
+        (parseFloat(fromAmount) < parseFloat(settings.minimum_transfer_usdt)))
+    ) {
+      return { validated: false, reason: "[TRANSFER] Minimum transfer amount" };
+    }
+  }
+
+  ////////////////////////////////
+  // WITHDRAW 요청 검증
+  if (type === "WITHDRAW") {
+    // 토큰 쌍 검증
+    if (fromToken !== "MGG" && fromToken !== "USDT") {
+      return { validated: false, reason: "[WITHDRAW] Invalid token pair" };
+    }
+
+    // 최소 출금 금액 확인
+    if (
+      (fromToken === "MGG" &&
+        (parseFloat(fromAmount) < parseFloat(settings.minimum_withdraw_mgg))) ||
+      (fromToken === "USDT" &&
+        (parseFloat(fromAmount) < parseFloat(settings.minimum_withdraw_usdt)))
+    ) {
+      return { validated: false, reason: "[WITHDRAW] Minimum withdraw amount" };
+    }
+  }
+
+  // 검증 성공
+  return { validated: true, reason: "validate success" };
 }
