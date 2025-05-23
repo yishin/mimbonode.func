@@ -381,7 +381,6 @@ export async function sendMgg(
   toAddress: string,
   amount: string,
 ) {
-  //
   try {
     if (
       !web3.utils.isAddress(fromAddress) || !web3.utils.isAddress(toAddress)
@@ -457,38 +456,84 @@ export async function sendMgg(
       await new Promise((resolve) => setTimeout(resolve, 3000));
     }
 
-    const nonce = await web3.eth.getTransactionCount(fromAddress, "pending");
-    const transferTx = {
-      from: fromAddress,
-      to: MGG_TOKEN_ADDRESS,
-      gas: gasLimit,
-      gasPrice,
-      nonce,
-      data: transferData,
-    };
+    // 논스 충돌 방지
+    let isNonceError = false;
+    let retryCount = 0;
+    const maxRetries = 2; // 최대 2번 재시도
 
-    const signedTransferTx = await web3.eth.accounts.signTransaction(
-      transferTx,
-      senderPrivateKey,
-    );
-    const receipt = await web3.eth.sendSignedTransaction(
-      signedTransferTx.rawTransaction,
-    );
+    do {
+      isNonceError = false;
+      try {
+        // 매번 새로운 논스 가져오기
+        const nonce = await web3.eth.getTransactionCount(
+          fromAddress,
+          "pending",
+        );
 
-    if (!receipt.status) {
-      throw new Error("Transaction failed");
-    }
+        const transferTx = {
+          from: fromAddress,
+          to: MGG_TOKEN_ADDRESS,
+          gas: gasLimit,
+          gasPrice,
+          nonce, // 새로운 논스 사용
+          data: transferData,
+        };
 
-    console.log(
-      `✅ MGG transfer complete: ${amount} MGG (${fromAddress} → ${toAddress})`,
-    );
+        const signedTransferTx = await web3.eth.accounts.signTransaction(
+          transferTx,
+          senderPrivateKey,
+        );
 
-    return {
-      success: true,
-      txHash: receipt.transactionHash,
-      gasUsed: receipt.gasUsed,
-      blockNumber: receipt.blockNumber,
-    };
+        const receipt = await web3.eth.sendSignedTransaction(
+          signedTransferTx.rawTransaction,
+        );
+
+        if (!receipt.status) {
+          throw new Error("Transaction failed");
+        }
+
+        console.log(
+          `✅ MGG transfer complete: ${amount} MGG (${fromAddress} → ${toAddress})`,
+        );
+
+        return {
+          success: true,
+          txHash: receipt.transactionHash,
+          gasUsed: receipt.gasUsed,
+          blockNumber: receipt.blockNumber,
+        };
+      } catch (txError) {
+        console.error("❌ MGG transfer failed:", txError);
+
+        // 논스 관련 오류 체크
+        if (
+          txError.message && (
+            txError.message.includes("replacement transaction underpriced") ||
+            txError.message.includes("nonce too low") ||
+            txError.message.includes("could not replace existing tx")
+          )
+        ) {
+          isNonceError = true;
+          retryCount++;
+
+          console.log(`❗ Nonce collision detected, ${retryCount}th retry...`);
+
+          // 재시도 전 잠시 대기
+          await new Promise((resolve) =>
+            setTimeout(resolve, 1500 * retryCount)
+          );
+
+          if (retryCount > maxRetries) {
+            throw new Error(
+              "❌ Maximum retry count exceeded: " + txError.message,
+            );
+          }
+        } else {
+          // 다른 종류의 오류는 그대로 던짐
+          throw txError;
+        }
+      }
+    } while (isNonceError && retryCount <= maxRetries);
   } catch (error) {
     console.error("MGG transfer failed:", {
       error: error.message || "Unknown error",
