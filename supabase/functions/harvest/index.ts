@@ -166,7 +166,7 @@ serve(async (req) => {
         if (harvestError) {
           // 유니크 제약 위반 (23505)인 경우 = 1시간 이내 중복 요청
           if (harvestError.code === "23505") {
-            console.log("Duplicate harvest request detected");
+            console.log("❕ Duplicate harvest request detected");
 
             try {
               await supabase.from("debug_logs").insert({
@@ -409,6 +409,10 @@ serve(async (req) => {
       );
     }
 
+    // 트랜잭션 간 지연 추가 (최소 1초)
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    console.log("waiting 1 sec");
+
     // 수수료 전송
     let feeTxHash = "";
     if (feeAmount > 0) {
@@ -418,7 +422,7 @@ serve(async (req) => {
         feeAmount.toString(),
       );
       if (feeResult.error) {
-        console.error("Error sending MGG:", result.error);
+        console.error("Error sending MGG 2:", result.error);
         return new Response(
           JSON.stringify({ error: result.error || "Internal server error" }),
           { status: 200, headers },
