@@ -466,6 +466,7 @@ serve(async (req) => {
           if (result.success) {
             txHash = result.txHash;
           } else {
+            console.error("❗ Error sending MGG:", result.error);
             return new Response(
               JSON.stringify({ error: "Transaction failed" }),
               { status: 400, headers },
@@ -477,7 +478,15 @@ serve(async (req) => {
             settings.wallet_fee,
             feeAmount.toString(),
           );
-          feeTxHash = feeResult.txHash;
+          if (feeResult.success) {
+            feeTxHash = feeResult.txHash;
+          } else {
+            console.error("❗ Error sending MGG fee:", feeResult.error);
+            return new Response(
+              JSON.stringify({ error: "Transaction failed" }),
+              { status: 400, headers },
+            );
+          }
 
           // 3. usdt 토큰을 wallet.usdt_balance에 잔액을 더해주다
           const { data: walletData, error: updateError } = await supabase
