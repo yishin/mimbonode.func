@@ -13,9 +13,13 @@ import {
   sendUsdt,
   setOperationWallet,
 } from "../utils/tokenUtils.ts";
+import { getXrpBalance, sendXrp } from "../utils/xrpUtils.ts";
 import { setCorsHeaders } from "../utils/corsUtils.ts";
 import { authenticateRequest } from "../utils/authUtils.ts";
-import { getBnbPriceFromBinance } from "../utils/exchangeUtils.ts";
+import {
+  getBnbPriceFromBinance,
+  getXrpPriceFromBinance,
+} from "../utils/exchangeUtils.ts";
 import { sendTelegramMessage } from "../utils/telegramUtils.ts";
 
 // Edge Function 시작
@@ -234,12 +238,16 @@ serve(async (req) => {
           numFromAmount < settings.minimum_withdraw_mgg) ||
         (type === "WITHDRAW" && fromToken === "BNB" &&
           numFromAmount < settings.minimum_withdraw_bnb) ||
-        (type === "SWAP" && fromToken === "USDT" &&
+        (type === "WITHDRAW" && fromToken === "XRP" &&
+          numFromAmount < settings.minimum_withdraw_xrp) ||
+        (type === "SWAP" && fromToken === "USDT" && toToken === "MGG" &&
           numFromAmount < settings.minimum_swap_usdt) ||
-        (type === "SWAP" && fromToken === "MGG" &&
+        (type === "SWAP" && fromToken === "MGG" && toToken === "USDT" &&
           numFromAmount < settings.minimum_swap_mgg) ||
-        (type === "SWAP" && fromToken === "BNB" &&
+        (type === "SWAP" && fromToken === "MGG" && toToken === "BNB" &&
           numFromAmount < settings.minimum_swap_mgg_to_bnb) ||
+        (type === "SWAP" && fromToken === "MGG" && toToken === "XRP" &&
+          numFromAmount < settings.minimum_swap_mgg_to_xrp) ||
         (type === "TRANSFER" && fromToken === "USDT" &&
           numFromAmount < settings.minimum_transfer_usdt) ||
         (type === "TRANSFER" && fromToken === "MGG" &&
@@ -320,14 +328,18 @@ serve(async (req) => {
 
       // 스왑 정책 확인
       if (type === "SWAP") {
-        if (fromToken !== "MGG" || (toToken !== "USDT" && toToken !== "BNB")) {
+        if (
+          fromToken !== "MGG" ||
+          (toToken !== "USDT" && toToken !== "BNB" && toToken !== "XRP")
+        ) {
           return rejectRequest("Invalid token pair");
         }
 
-        // 최소 스왑 금액 확인
-        const numFromAmount = parseFloat(fromAmount);
-        if (numFromAmount < settings.minimum_swap_mgg) {
-          return rejectRequest("Minimum swap amount is not met");
+        if (toToken === "BNB" && settings.enable_swap_mgg_to_bnb !== "true") {
+          return rejectRequest("Swap to BNB is not enabled");
+        }
+        if (toToken === "XRP" && settings.enable_swap_mgg_to_xrp !== "true") {
+          return rejectRequest("Swap to XRP is not enabled");
         }
       }
     } // 관리자외 정책 체크 끝
@@ -354,7 +366,7 @@ serve(async (req) => {
       : await getAddressByUsername(from);
     const toAddress = to.startsWith("sid:")
       ? await getAddressBySid(to.split(":")[1])
-      : to.startsWith("0x")
+      : to.startsWith("0x") || to.startsWith("r")
       ? to
       : await getAddressByUsername(to);
 
@@ -573,10 +585,86 @@ serve(async (req) => {
           }
 
           console.log(
-            `🔄 BNB 지급:${toAmount} BNB, 시세:${bnbPrice}`,
+            `🔄 BNB transfer:${toAmount} BNB, price:${bnbPrice}`,
+          );
+        } else if (fromToken === "MGG" && toToken === "XRP") {
+          // XRP 스왑 ////////////////////////////////
+
+          // XRP 가격 확인
+          const xrpPrice = await getXrpPriceFromBinance(); // 바이낸스 거래소에서 현재 가격 조회 : 2.4307 USDT
+          if (xrpPrice === 0) {
+            return rejectRequest("Failed to get XRP price");
+          }
+
+          // mgg -> xrp 스왑
+          exchangeRate = parseFloat(settings.mgg_price_in_usdt); // tx 기록용
+          feeRate = parseFloat(settings.swap_fee_rate_mgg_to_xrp);
+          feeAmount = (parseFloat(fromAmount) * feeRate / 100)
+            .toFixed(8);
+          toAmount = parseFloat(
+            (parseFloat(fromAmount) - feeAmount) *
+              exchangeRate / xrpPrice,
+          ).toFixed(8);
+
+          // 0. 스왑 금액에 필요한 검증
+
+          // toAmount 금액이 맞는지 확인
+          // const toAmountVerified = parseFloat(
+          //   (parseFloat(fromAmount) - feeAmount) *
+          //     exchangeRate / bnbPrice,
+          // ).toFixed(8);
+          // if (String(toAmountVerified) !== String(toAmount)) {
+          //   return rejectRequest("Invalid amount");
+          // }
+
+          // MGG 잔액확인
+          const mggBalance = await getMggBalance(fromAddress);
+          if (parseFloat(fromAmount) > parseFloat(mggBalance)) {
+            return new Response(
+              JSON.stringify({ error: "Insufficient balance" }),
+              { status: 400, headers },
+            );
+          }
+          // 1. mgg 토큰을 운영지갑으로 전송 (전송금액)
+          const toSendAmount = parseFloat(fromAmount) - parseFloat(feeAmount);
+          const result = await sendMgg(
+            fromAddress,
+            settings.wallet_operation,
+            toSendAmount.toString(),
+          );
+          if (result.success) {
+            txHash = result.txHash;
+          } else {
+            return new Response(
+              JSON.stringify({ error: "Transaction failed" }),
+              { status: 400, headers },
+            );
+          }
+          // 2. 수수료 처리 (mgg를 수수료지갑으로 전송)
+          const feeResult = await sendMgg(
+            fromAddress,
+            settings.wallet_fee,
+            feeAmount.toString(),
+          );
+          feeTxHash = feeResult.txHash;
+
+          // 3. wallet.xrp_balance에 잔액을 더해주다
+          const { data: walletData, error: updateError } = await supabase
+            .rpc("increment_xrp_balance", {
+              userid: user.id,
+              amount: parseFloat(toAmount),
+            });
+
+          if (updateError) {
+            console.error("Error updating wallet balance:", updateError);
+            return rejectRequest("Failed to update wallet");
+          }
+
+          console.log(
+            `🔄 XRP transfer:${toAmount} XRP, price:${xrpPrice}`,
           );
         } else {
-          // MGG -> USDT 스왑이 아닌 경우
+          // MGG -> USDT/BNB/XRP 스왑이 아닌 경우
           return new Response(
             JSON.stringify({ error: "Invalid request" }),
             { status: 400, headers },
@@ -735,16 +823,86 @@ serve(async (req) => {
               txHash = result.txHash;
             } else {
               // 토큰 전송 실패시 잔액 복구
-              const { data: updateUsdtBalance, error: updateUsdtBalanceError } =
+              const { data: updateBnbBalance, error: updateBnbBalanceError } =
                 await supabase
-                  .rpc("increment_usdt_balance", {
+                  .rpc("increment_bnb_balance", {
                     userid: user.id,
                     amount: parseFloat(fromAmount),
                   });
-              if (updateUsdtBalanceError) {
+              if (updateBnbBalanceError) {
                 console.error(
-                  "Error updating USDT balance:",
-                  updateUsdtBalanceError,
+                  "Error updating BNB balance:",
+                  updateBnbBalanceError,
+                );
+              }
+              return rejectRequest("Transaction failed");
+            }
+          }
+        } else if (fromToken === "XRP") {
+          const xrpBalance = await getXrpBalance(""); // 출금 지갑의 XRP 잔액 확인
+          if (parseFloat(fromAmount) > parseFloat(xrpBalance)) {
+            return new Response(
+              JSON.stringify({ error: "Insufficient balance" }),
+              { status: 400, headers },
+            );
+          }
+
+          // xrp 출금
+          if (isAdmin && adminPage) {
+            // 관리자 전송
+            const result = await sendXrp(fromAddress, toAddress, fromAmount);
+            txHash = result.txHash;
+            feeTxHash = result.feeTxHash;
+          } else {
+            // 사용자 전송
+            if (
+              parseFloat(settings.withdraw_fee_rate_xrp) >
+                0
+            ) {
+              feeAmount = parseFloat(fromAmount) *
+                parseFloat(settings.withdraw_fee_rate_xrp) /
+                100;
+              toAmount = parseFloat(fromAmount) - feeAmount;
+            } else {
+              // 수수료 없음
+              feeAmount = 0;
+              toAmount = fromAmount;
+            }
+            // XRP 출금 처리 : 출금 지갑에서 수수료를 제외한 금액의 XRP를 출금한다.
+            // DB에서 사용자의 XRP 잔액에서 출금 금액의 XRP를 차감한다.
+            // 수수료 출금 : DB에서 사용자의 XRP 잔액에서 수수료를 차감한다.
+            const { data: updateXrpBalance, error: updateXrpBalanceError } =
+              await supabase
+                .rpc("decrease_xrp_balance", {
+                  userid: user.id,
+                  amount: parseFloat(fromAmount),
+                });
+            if (updateXrpBalanceError) {
+              console.error(
+                "Error updating XRP balance:",
+                updateXrpBalanceError,
+              );
+            }
+            // 토큰을 전송한다.
+            const result = await sendXrp(
+              "",
+              toAddress,
+              toAmount,
+            );
+            if (result.success) {
+              txHash = result.txHash;
+            } else {
+              // 토큰 전송 실패시 잔액 복구
+              const { data: updateXrpBalance, error: updateXrpBalanceError } =
+                await supabase
+                  .rpc("increment_xrp_balance", {
+                    userid: user.id,
+                    amount: parseFloat(fromAmount),
+                  });
+              if (updateXrpBalanceError) {
+                console.error(
+                  "Error updating XRP balance:",
+                  updateXrpBalanceError,
                 );
               }
               return rejectRequest("Transaction failed");
