@@ -263,71 +263,112 @@ serve(async (req) => {
 
       // 출금시 관리자 승인 체크/출금 요청
       if (type === "WITHDRAW") {
-        if (fromToken === "USDT" && settings.minimum_withdraw_usdt > 0) {
-          // 1일이내 출금 금액 확인
-          const { data: totalWithdrawals, error } = await supabase.rpc(
-            "get_user_usdt_withdrawal_24h",
-            {
-              userid: user.id,
-            },
-          );
-
-          if (error) {
-            console.error(
-              "Error fetching previous withdrawals:",
-              error.message,
-            );
-            return new Error("Request failed: " + error.message);
-          }
-
-          if (toAmount < parseFloat(settings.minimum_withdraw_usdt)) {
-            // 허용금액 미달
-            return new Error(
-              "Withdrawal amount is less than the minimum required.",
-            );
-          }
-          // 출금 가능 잔액확인
-          if (wallet.usdt_balance < parseFloat(fromAmount)) {
-            return rejectRequest("Insufficient balance");
-          }
-
-          // 관리자 승인이 필요한 금액인지 확인
-          if (
-            totalWithdrawals + parseFloat(fromAmount) >
-              parseFloat(settings.confirm_over_usdt_amount_day)
-          ) {
-            // 관리자 승인 요청
-            const { data: transactionData, error: insertError } = await supabase
-              .from("transactions")
-              .insert([
-                {
-                  user_id: user.id,
-                  from,
-                  from_token: "USDT",
-                  from_amount: fromAmount,
-                  to: to,
-                  status: "CONFIRM",
-                },
-              ]);
-
-            if (insertError) {
-              console.error("Error creating transaction record:", insertError);
-              return new Response(
-                JSON.stringify({ error: "Request admin approval" }),
-                { status: 200, headers },
+        if (fromToken === "USDT") {
+          if (parseFloat(settings.minimum_withdraw_usdt) > 0) {
+            // 최소 출금 금액 확인
+            if (fromAmount < parseFloat(settings?.minimum_withdraw_usdt)) {
+              return new Error(
+                "Withdrawal amount is less than the minimum required.",
               );
             }
 
+            // 1일이내 출금 금액 확인
+            const { data: totalWithdrawals, error } = await supabase.rpc(
+              "get_user_usdt_withdrawal_24h",
+              {
+                userid: user.id,
+              },
+            );
+
+            if (error) {
+              console.error(
+                "Error fetching previous withdrawals:",
+                error.message,
+              );
+              return new Error("Request failed: " + error.message);
+            }
+
+            // 관리자 승인이 필요한 금액인지 확인
+            if (
+              parseFloat(fromAmount) >
+                parseFloat(settings.confirm_over_usdt_amount_day)
+            ) {
+              // 관리자 승인 요청
+              const { data: transactionData, error: insertError } =
+                await supabase
+                  .from("transactions")
+                  .insert([
+                    {
+                      user_id: user.id,
+                      from,
+                      from_token: "USDT",
+                      from_amount: fromAmount,
+                      to: to,
+                      status: "CONFIRM",
+                    },
+                  ]);
+
+              if (insertError) {
+                console.error(
+                  "Error creating transaction record:",
+                  insertError,
+                );
+                return new Response(
+                  JSON.stringify({ error: "Request admin approval" }),
+                  { status: 200, headers },
+                );
+              }
+
+              return new Response(
+                JSON.stringify({ success: true }),
+                { status: 200, headers },
+              );
+            }
+          }
+
+          // 출금 가능 잔액확인
+          if (parseFloat(fromAmount) > wallet.usdt_balance) {
+            return rejectRequest("Insufficient balance");
+          }
+        }
+
+        // MGG 출금 정책 확인
+        if (fromToken === "MGG") {
+          if (settings.enable_withdraw_mgg !== "true") {
             return new Response(
-              JSON.stringify({ success: true }),
+              JSON.stringify({
+                error: "Withdrawals are temporarily suspended.",
+              }),
               { status: 200, headers },
             );
+          }
+
+          // 출금 가능 잔액확인
+          if (parseFloat(fromAmount) > wallet.bnb_balance) {
+            return rejectRequest("Insufficient balance");
+          }
+        }
+
+        // XRP 출금 정책 확인
+        if (fromToken === "XRP") {
+          if (settings.enable_withdraw_xrp !== "true") {
+            return new Response(
+              JSON.stringify({
+                error: "Withdrawals are temporarily suspended.",
+              }),
+              { status: 200, headers },
+            );
+          }
+          // 출금 가능 잔액확인
+          if (parseFloat(fromAmount) > wallet.xrp_balance) {
+            return rejectRequest("Insufficient balance");
           }
         }
       }
 
       // 스왑 정책 확인
       if (type === "SWAP") {
+        // MGG to USDT, BNB, XRP 스왑 확인
         if (
           fromToken !== "MGG" ||
           (toToken !== "USDT" && toToken !== "BNB" && toToken !== "XRP")
@@ -335,10 +376,13 @@ serve(async (req) => {
           return rejectRequest("Invalid token pair");
         }
 
-        if (toToken === "BNB" && settings.enable_swap_mgg_to_bnb !== "true") {
+        // BNB 스왑 정책 확인
+        if (toToken === "BNB" && settings?.enable_swap_mgg_to_bnb !== "true") {
           return rejectRequest("Swap to BNB is not enabled");
         }
-        if (toToken === "XRP" && settings.enable_swap_mgg_to_xrp !== "true") {
+
+        // XRP 스왑 정책 확인
+        if (toToken === "XRP" && settings?.enable_swap_mgg_to_xrp !== "true") {
           return rejectRequest("Swap to XRP is not enabled");
         }
       }
@@ -521,13 +565,13 @@ serve(async (req) => {
           }
 
           // mgg -> bnb 스왑
-          exchangeRate = parseFloat(settings.mgg_price_in_usdt); // tx 기록용
+          exchangeRate = bnbPrice; // tx 기록용
           feeRate = parseFloat(settings.swap_fee_rate_mgg_to_bnb);
           feeAmount = (parseFloat(fromAmount) * feeRate / 100)
             .toFixed(8);
           toAmount = parseFloat(
             (parseFloat(fromAmount) - feeAmount) *
-              exchangeRate / bnbPrice,
+              parseFloat(settings.mgg_price_in_usdt) / bnbPrice,
           ).toFixed(8);
 
           // 0. 스왑 금액에 필요한 검증
@@ -597,13 +641,13 @@ serve(async (req) => {
           }
 
           // mgg -> xrp 스왑
-          exchangeRate = parseFloat(settings.mgg_price_in_usdt); // tx 기록용
+          exchangeRate = xrpPrice; // tx 기록용
           feeRate = parseFloat(settings.swap_fee_rate_mgg_to_xrp);
           feeAmount = (parseFloat(fromAmount) * feeRate / 100)
             .toFixed(8);
           toAmount = parseFloat(
             (parseFloat(fromAmount) - feeAmount) *
-              exchangeRate / xrpPrice,
+              parseFloat(settings.mgg_price_in_usdt) / xrpPrice,
           ).toFixed(8);
 
           // 0. 스왑 금액에 필요한 검증
@@ -1005,6 +1049,8 @@ serve(async (req) => {
 });
 
 function rejectRequest(reason?: string) {
+  console.error("🚫 Policy violation:", reason);
+
   return new Response(
     JSON.stringify({
       error: "Policy violation",
