@@ -148,9 +148,9 @@ serve(async (req) => {
 
       // 1. 개인 지갑에서 입금된 USDT 조회
       const balance = await getUsdtBalance(address);
-      if (Number(balance) <= 0) {
+      if (Number(balance) < 1) {
         return new Response(
-          JSON.stringify({ error: "Insufficient balance" }),
+          JSON.stringify({ error: "Not enough USDT to collect" }),
           { status: 200, headers },
         );
       }
