@@ -414,8 +414,8 @@ export async function sendMgg(
         from: fromAddress,
         to: MGG_TOKEN_ADDRESS,
         data: transferData,
-      }) * 1.2,
-    ); // 20% 버퍼 추가
+      }) * 2.0,
+    ); // 100% 버퍼 추가
 
     const gasLimit = estimatedGas;
     const gasFee = BigInt(gasPrice) * BigInt(gasLimit);
