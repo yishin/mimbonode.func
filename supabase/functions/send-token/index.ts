@@ -71,6 +71,7 @@ serve(async (req) => {
       toAmount: toAmountOrg,
       adminPage, // 관리자 페이지 여부
     } = requestData;
+    // 요청데이터 log 출력
     console.log(
       `type: ${type || ""} from: ${from || ""} fromToken: ${
         fromToken || ""
@@ -474,9 +475,17 @@ serve(async (req) => {
           }
         } else if (fromToken === "BNB") {
           // bnb 전송
-          const result = await sendBnb(fromAddress, toAddress, fromAmount);
-          txHash = result.txHash;
-          feeTxHash = result.feeTxHash;
+          if (isAdmin && adminPage) {
+            const result = await sendBnb(fromAddress, toAddress, fromAmount);
+            txHash = result.txHash;
+            feeTxHash = result.feeTxHash;
+          } else {
+            // 사용자의 BNB 전송은 지원하지 않음
+            return new Response(
+              JSON.stringify({ error: "BNB transfer is not supported" }),
+              { status: 400, headers },
+            );
+          }
         }
       } else if (type === "SWAP") { // SWAP
         ////////////////////////////////
@@ -528,6 +537,9 @@ serve(async (req) => {
               { status: 400, headers },
             );
           }
+
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+
           // 2. 수수료 처리
           const feeResult = await sendMgg(
             fromAddress,
@@ -563,6 +575,7 @@ serve(async (req) => {
           if (bnbPrice === 0) {
             return rejectRequest("Failed to get BNB price");
           }
+          console.log("bnbPrice", bnbPrice);
 
           // mgg -> bnb 스왑
           exchangeRate = bnbPrice; // tx 기록용
@@ -608,6 +621,9 @@ serve(async (req) => {
               { status: 400, headers },
             );
           }
+
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+
           // 2. 수수료 처리 (mgg를 수수료지갑으로 전송)
           const feeResult = await sendMgg(
             fromAddress,
@@ -639,6 +655,7 @@ serve(async (req) => {
           if (xrpPrice === 0) {
             return rejectRequest("Failed to get XRP price");
           }
+          console.log("xrpPrice", xrpPrice);
 
           // mgg -> xrp 스왑
           exchangeRate = xrpPrice; // tx 기록용
@@ -684,6 +701,9 @@ serve(async (req) => {
               { status: 400, headers },
             );
           }
+
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+
           // 2. 수수료 처리 (mgg를 수수료지갑으로 전송)
           const feeResult = await sendMgg(
             fromAddress,
