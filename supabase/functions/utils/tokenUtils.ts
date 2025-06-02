@@ -6,11 +6,11 @@ import { decryptPrivateKey } from "./cryptoUtils.ts";
 const MGG_TOKEN_ADDRESS = Deno.env.get("MGG_TOKEN_ADDRESS");
 const USDT_TOKEN_ADDRESS = Deno.env.get("USDT_TOKEN_ADDRESS");
 
-const alchemyUrl = Deno.env.get("ENVIRONMENT") === "production"
-  ? `https://bnb-mainnet.g.alchemy.com/v2/${Deno.env.get("ALCHEMY_API_KEY")}`
-  : `https://bnb-mainnet.g.alchemy.com/v2/${Deno.env.get("ALCHEMY_API_KEY")}`;
+const endpointUrl = Deno.env.get("ENVIRONMENT") === "production"
+  ? Deno.env.get("QUICKNODE_HTTP_ENDPOINT") //`https://bnb-mainnet.g.alchemy.com/v2/${Deno.env.get("ALCHEMY_API_KEY")}`
+  : Deno.env.get("QUICKNODE_HTTP_ENDPOINT");
 
-const provider = new Web3.providers.HttpProvider(alchemyUrl);
+const provider = new Web3.providers.HttpProvider(endpointUrl);
 const web3 = new Web3(provider);
 
 // 수수료를 지급하는 운영용 지갑 설정
@@ -402,7 +402,7 @@ export async function sendMgg(
     // 가스비 계산
     const gasPrice = await web3.eth.getGasPrice();
 
-    // 가스 한도 추정 및 20% 버퍼 추가
+    // 가스 한도 추정 및 100% 버퍼 추가
     const amountToSend = web3.utils.toWei(amount.toString(), "ether");
     const transferData = mggContract.methods.transfer(
       toAddress,

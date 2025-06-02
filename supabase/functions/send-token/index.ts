@@ -291,8 +291,9 @@ serve(async (req) => {
 
             // 관리자 승인이 필요한 금액인지 확인
             if (
-              parseFloat(fromAmount) >
-                parseFloat(settings.confirm_over_usdt_amount_day)
+              parseInt(settings.confirm_over_usdt_amount_day) !== 0 && // USDT 1일 출금금액이 설정되어 있고
+              (totalWithdrawals + parseFloat(fromAmount) >
+                parseFloat(settings.confirm_over_usdt_amount_day)) // 1일 출금금액이 설정된 금액을 초과하면
             ) {
               // 관리자 승인 요청
               const { data: transactionData, error: insertError } =
