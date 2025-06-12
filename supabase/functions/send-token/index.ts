@@ -572,9 +572,15 @@ serve(async (req) => {
           // BNB 스왑 ////////////////////////////////
 
           // BNB 가격 확인
-          const bnbPrice = await getBnbPriceFromBinance(); // 바이낸스 거래소에서 현재 가격 조회 : 650.00 USDT
-          if (bnbPrice === 0) {
-            return rejectRequest("Failed to get BNB price");
+          let bnbPrice = await getBnbPriceFromBinance(); // 바이낸스 거래소에서 현재 가격 조회 : 650.00 USDT
+          if (bnbPrice === 0 || isNaN(bnbPrice)) {
+            await new Promise((resolve) => setTimeout(resolve, 1000)); // 1초 대기
+
+            bnbPrice = await getBnbPriceFromBinance(); // 다시 거래 조회
+            if (bnbPrice === 0 || isNaN(bnbPrice)) {
+              // 2번 실패시 에러 반환
+              return rejectRequest("Failed to get BNB price");
+            }
           }
           console.log("bnbPrice", bnbPrice);
 
@@ -652,9 +658,15 @@ serve(async (req) => {
           // XRP 스왑 ////////////////////////////////
 
           // XRP 가격 확인
-          const xrpPrice = await getXrpPriceFromBinance(); // 바이낸스 거래소에서 현재 가격 조회 : 2.4307 USDT
-          if (xrpPrice === 0) {
-            return rejectRequest("Failed to get XRP price");
+          let xrpPrice = await getXrpPriceFromBinance(); // 바이낸스 거래소에서 현재 가격 조회 : 2.4307 USDT
+          if (xrpPrice === 0 || isNaN(xrpPrice)) {
+            await new Promise((resolve) => setTimeout(resolve, 1000)); // 1초 대기
+
+            xrpPrice = await getXrpPriceFromBinance(); // 다시 거래 조회
+            if (xrpPrice === 0 || isNaN(xrpPrice)) {
+              // 2번 실패시 에러 반환
+              return rejectRequest("Failed to get XRP price");
+            }
           }
           console.log("xrpPrice", xrpPrice);
 
