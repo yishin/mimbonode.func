@@ -107,7 +107,7 @@ serve(async (req) => {
     // 사용자 검증 (관리자 제외 - 다른 사용자의 금액을 회수하거나 운영지갑 운영 필요)
     if (profile.user_role !== "admin") { // || user.is_super_admin !== true
       // 사용자 검증
-      if (profile.user_id !== user.id) {
+      if (profile.username !== from) {
         console.error("🚫 Invalid user");
 
         // 사용자 차단
@@ -164,6 +164,9 @@ serve(async (req) => {
         // 유니크 제약 위반 (23505)인 경우 = 30s 이내 중복 요청
         if (trxError.code === "23505") {
           console.log("Duplicate trx request detected");
+
+          // 사용자 차단
+          await blockUser(user.id, "Duplicate request");
 
           try {
             await supabase.from("debug_logs").insert({
@@ -487,6 +490,12 @@ serve(async (req) => {
               { status: 400, headers },
             );
           }
+        } else {
+          // 지원하지 않는 토큰
+          return new Response(
+            JSON.stringify({ error: "Invalid request" }),
+            { status: 400, headers },
+          );
         }
       } else if (type === "SWAP") { // SWAP
         ////////////////////////////////
@@ -1097,16 +1106,12 @@ async function blockUser(userId: string, reason: string) {
   const { data: userData, error: userError } = await supabase
     .from("profiles")
     .update({ is_block: true, block_reason: reason })
-    .eq("user_id", userId);
+    .eq("user_id", userId)
+    .select("username")
+    .single();
 
   if (userError) {
     console.error("Error blocking user:", userError);
-
-    const { data: userData, error } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("user_id", userId)
-      .single();
 
     await sendTelegramMessage(
       `🚫 사용자 차단 실패: ${userData?.username}(${userId}) ${userError.message}`,
@@ -1114,7 +1119,9 @@ async function blockUser(userId: string, reason: string) {
     return;
   }
 
-  await sendTelegramMessage(`🚫 사용자 차단: ${userData?.username} ${reason}`);
+  await sendTelegramMessage(
+    `🚫 사용자 차단: ${userData?.username} (${userId}) ${reason}`,
+  );
 }
 
 /**
