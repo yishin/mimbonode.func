@@ -81,9 +81,15 @@ export async function getXrpBalance(address: any) {
  * @param fromAddress - 송신자 주소
  * @param toAddress - 수신자 주소
  * @param amount - 전송할 XRP 수량
+ * @param destinationTag - 수신자 태그 (선택사항)
  * @returns {Object} 전송 결과 객체
  */
-export async function sendXrp(fromAddress: any, toAddress: any, amount: any) {
+export async function sendXrp(
+  fromAddress: any,
+  toAddress: any,
+  amount: any,
+  destinationTag?: any,
+) {
   if (!fromAddress || fromAddress === "") {
     fromAddress = XRP_OPERATION_WALLET;
   }
@@ -111,6 +117,16 @@ export async function sendXrp(fromAddress: any, toAddress: any, amount: any) {
     // XRP 금액 정규화 (소수점 자리 제한)
     const normalizedAmount = normalizeXrpAmount(amount);
 
+    // Destination Tag 검증
+    if (destinationTag !== undefined && destinationTag !== null) {
+      const tagNumber = parseInt(destinationTag);
+      if (isNaN(tagNumber) || tagNumber < 0 || tagNumber > 4294967295) {
+        throw new Error(
+          "Destination tag must be a number between 0 and 4294967295",
+        );
+      }
+    }
+
     console.log(`Normalized amount: ${amount} -> ${normalizedAmount}`);
 
     const client = new Client(XRP_ENDPOINT);
@@ -121,12 +137,19 @@ export async function sendXrp(fromAddress: any, toAddress: any, amount: any) {
       const wallet = Wallet.fromSeed(XRP_OPERATION_WALLET_SEED);
 
       // 트랜잭션 준비
-      const prepared = await client.autofill({
+      const transactionData: any = {
         TransactionType: "Payment",
         Account: wallet.classicAddress, // 항상 운영 지갑에서 전송
         Destination: toAddress,
         Amount: xrpToDrops(normalizedAmount),
-      });
+      };
+
+      // Destination Tag가 있으면 추가
+      if (destinationTag !== undefined && destinationTag !== null) {
+        transactionData.DestinationTag = parseInt(destinationTag);
+      }
+
+      const prepared = await client.autofill(transactionData);
 
       // 트랜잭션 서명
       const signed = wallet.sign(prepared);
@@ -135,9 +158,11 @@ export async function sendXrp(fromAddress: any, toAddress: any, amount: any) {
       const result = await client.submitAndWait(signed.tx_blob);
 
       if (result.result.meta.TransactionResult === "tesSUCCESS") {
-        console.log(
-          `💧 XRP transfer complete: ${normalizedAmount} XRP (${wallet.classicAddress} → ${toAddress})`,
-        );
+        const logMessage = destinationTag
+          ? `💧 XRP transfer complete: ${normalizedAmount} XRP (${wallet.classicAddress} → ${toAddress}, Tag: ${destinationTag})`
+          : `💧 XRP transfer complete: ${normalizedAmount} XRP (${wallet.classicAddress} → ${toAddress})`;
+
+        console.log(logMessage);
 
         return {
           success: true,
@@ -146,6 +171,7 @@ export async function sendXrp(fromAddress: any, toAddress: any, amount: any) {
           ledgerIndex: result.result.ledger_index,
           originalAmount: amount,
           normalizedAmount: normalizedAmount,
+          destinationTag: destinationTag,
         };
       } else {
         throw new Error(
@@ -167,7 +193,7 @@ export async function sendXrp(fromAddress: any, toAddress: any, amount: any) {
     return {
       success: false,
       error: error?.message || "Unknown error",
-      details: { fromAddress, toAddress, amount },
+      details: { fromAddress, toAddress, amount, destinationTag },
     };
   }
 }

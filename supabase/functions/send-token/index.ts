@@ -69,6 +69,7 @@ serve(async (req) => {
       to,
       toToken,
       toAmount: toAmountOrg,
+      destinationTag,
       adminPage, // 관리자 페이지 여부
     } = requestData;
     // 요청데이터 log 출력
@@ -335,10 +336,7 @@ serve(async (req) => {
           if (parseFloat(fromAmount) > wallet.usdt_balance) {
             return rejectRequest("Insufficient balance");
           }
-        }
-
-        // MGG 출금 정책 확인
-        if (fromToken === "MGG") {
+        } else if (fromToken === "MGG") { // MGG 출금 정책 확인
           if (settings.enable_withdraw_mgg !== "true") {
             return new Response(
               JSON.stringify({
@@ -349,13 +347,12 @@ serve(async (req) => {
           }
 
           // 출금 가능 잔액확인
-          if (parseFloat(fromAmount) > wallet.bnb_balance) {
+          const fromAddress = await getAddressByUsername(from);
+          const mggBalance = await getMggBalance(fromAddress);
+          if (parseFloat(fromAmount) > mggBalance) {
             return rejectRequest("Insufficient balance");
           }
-        }
-
-        // XRP 출금 정책 확인
-        if (fromToken === "XRP") {
+        } else if (fromToken === "XRP") { // XRP 출금 정책 확인
           if (settings.enable_withdraw_xrp !== "true") {
             return new Response(
               JSON.stringify({
@@ -368,6 +365,8 @@ serve(async (req) => {
           if (parseFloat(fromAmount) > wallet.xrp_balance) {
             return rejectRequest("Insufficient balance");
           }
+        } else {
+          return rejectRequest("Invalid token");
         }
       }
 
@@ -936,7 +935,12 @@ serve(async (req) => {
           // xrp 출금
           if (isAdmin && adminPage) {
             // 관리자 전송
-            const result = await sendXrp(fromAddress, toAddress, fromAmount);
+            const result = await sendXrp(
+              fromAddress,
+              toAddress,
+              fromAmount,
+              destinationTag,
+            );
             txHash = result.txHash;
             feeTxHash = result.feeTxHash;
           } else {
@@ -974,6 +978,7 @@ serve(async (req) => {
               "",
               toAddress,
               toAmount,
+              destinationTag,
             );
             if (result.success) {
               txHash = result.txHash;
@@ -1027,6 +1032,7 @@ serve(async (req) => {
           fee_rate: feeRate,
           fee_amount: feeAmount,
           fee_tx_hash: feeTxHash,
+          destination_tag: destinationTag,
         };
         const { data: transactionData, error: insertError } = await supabase
           .from("transactions")
