@@ -247,10 +247,18 @@ serve(async (req) => {
 
       // 출금 정책 확인
       if (type === "WITHDRAW") {
-        // feeding 정책 확인
-        if (profile.feeding === false) {
-          console.log("🚫 Feeding is temporarily suspended.");
-          await blockUser(user.id, "Feeding is temporarily suspended.");
+        // feeding & 노드 보유 유무 체크
+        const { data: nodeData, error: nodeError } = await supabase
+          .from("mypackages")
+          .select("count")
+          .eq("user_id", user.id)
+          .single();
+
+        const packageCount = nodeData?.count || 0;
+
+        if (profile.feeding === false && packageCount === 0) {
+          console.log("User blocked: No feeding and no packages");
+          await blockUser(user.id, "No feeding permission and no packages");
 
           return rejectRequest("temporarily suspended.");
         }
