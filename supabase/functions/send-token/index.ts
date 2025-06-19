@@ -21,6 +21,7 @@ import {
   getXrpPriceFromBinance,
 } from "../utils/exchangeUtils.ts";
 import { sendTelegramMessage } from "../utils/telegramUtils.ts";
+import { verifyTurnstileToken } from "../utils/turnstileUtils.ts";
 
 // Edge Function 시작
 serve(async (req) => {
@@ -70,6 +71,7 @@ serve(async (req) => {
       toToken,
       toAmount: toAmountOrg,
       destinationTag,
+      turnstileToken,
       adminPage, // 관리자 페이지 여부
     } = requestData;
     // 요청데이터 log 출력
@@ -102,6 +104,32 @@ serve(async (req) => {
         }),
         { status: 400, headers }, // bad request
       );
+    }
+
+    // turnstile 토큰 검증
+    // turnstileToken:  0.lVHGmL27wx9kSzWNiELzKGVL0trRtbzm56GZKX3Gfk3VyhavPD7xwLVGIRN4BITABwKLZ8cTLPv_uxSRtUIg9QGnTGx3Z9EwPzb9cjqSycJDVlUK-JEtTngvHJ0EUa_tu77BHRADjnjxSba623cj0x7hjAy9PFD4lv97FoCA2WOPAh2VLriIWjsEs9GsqqTI3Crfi0qlyWJGgjDW4drf_0cJQ5Sa_DApAs-bBeQJY4PYkAhPfTphr3NNLXNtykO7C3vjQys514es4uWnRDw69ntABKn8hHv7Xjs3fyjg7PB5ZOMw83NJO5HzAEDRw9RJyKBm6STE3Qtxaq09__EavbMfmOauP4qEuQ1yRe5D6tP-QCVHJQERAPBjo9ZXDVK6rCjWNF-4Yh9hprZXNtt7h32icq7-SSmGFchZWwad6kdiuposT3NCFghPwibWAdISzBPEp77wfOjAp4R_YerOQgXrrKGMeYa1j9HTG9HnlIXQ9aG8ZroSqsNVTDZ4cfoVaXqr7ANQB13uAzQFR6jnteXLTgaKLFM1GVK8YSxQR5XhVbG0vu_mpG8pYNNmOvwT9uDYnaTO5Ila_mVfnE8hcyo5c0KxxtTKfpldSxVdwiVNLDf_A6wOQyHZ6TBL5dwJJc8tuBkFZKXJqkSSViJhDLCZ5AapcvamOg-QDj5w52LFi7fB0k2IyXmcW_kWa4OJwx-4pXMzZ7hHqMiHKqb2fnbwBRspdjDC1BjWTuTlUsIy73ExeyYV6dR9ezD21o9VTWOZr1YJ-4lUaTY8iq-hOsdYyT86dgDZgf5nu64M1-IpP6ETVUw0aGh-p7fcKq182lvPIJTqSqpAMXEuPTYLJgpM1p_UxlxGW81hTt9Px6DP7oJfK0h37rn70Y_XNb1bnyIDbPMo-ajeW-FDFseQBQ.heWyAY_AbsTWdgiePFqCMA.929d0e9efb10f2a4c57cc15a56a4601fc3db6e1363d8c6d983ee4ef58e026491
+
+    console.log(`turnstileToken: ${turnstileToken.slice(0, 32)}...`);
+    if (turnstileToken) {
+      if (
+        Deno.env.get("DEBUG_MODE") === "true" &&
+        turnstileToken === "local-dev-token"
+      ) {
+        // 로컬 개발 환경에서만 local-dev-token 허용
+        console.log("🔧 DEBUG_MODE is true");
+      } else {
+        // 토큰 검증
+        const turnstileResult = await verifyTurnstileToken(turnstileToken);
+        if (!turnstileResult.success) {
+          console.error("🚫 Invalid turnstile token");
+          // await blockUser(user.id, "Invalid turnstile token");
+          return rejectRequest("Invalid turnstile token");
+        }
+      }
+    } else {
+      // 토큰이 없으면 예전 버전이므로 페이지 리로드 필요
+      console.log("🚫 No turnstile token: Need page reload");
+      return rejectRequest("Need page reload");
     }
 
     ////////////////////////////////
@@ -373,6 +401,15 @@ serve(async (req) => {
           // 출금 가능 잔액확인
           if (parseFloat(fromAmount) > wallet.xrp_balance) {
             return rejectRequest("Insufficient balance");
+          }
+        } else if (fromToken === "BNB") {
+          if (settings.enable_withdraw_bnb !== "true") {
+            return new Response(
+              JSON.stringify({
+                error: "Withdrawals are temporarily suspended.",
+              }),
+              { status: 200, headers },
+            );
           }
         } else {
           return rejectRequest("Invalid token");
