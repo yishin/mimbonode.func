@@ -219,6 +219,12 @@ serve(async (req) => {
 
       // 출금 정책 확인
       if (type === "WITHDRAW") {
+        // feeding 정책 확인
+        if (profile.feeding === false) {
+          return rejectRequest("temporarily suspended.");
+        }
+
+        // 토큰별 출금 활성화 체크
         if (
           (fromToken === "USDT" && settings.enable_withdraw_usdt !== "true") ||
           (fromToken === "MGG" && settings.enable_withdraw_mgg !== "true") ||
