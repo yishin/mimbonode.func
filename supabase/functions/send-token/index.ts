@@ -221,6 +221,9 @@ serve(async (req) => {
       if (type === "WITHDRAW") {
         // feeding 정책 확인
         if (profile.feeding === false) {
+          console.log("🚫 Feeding is temporarily suspended.");
+          await blockUser(user.id, "Feeding is temporarily suspended.");
+
           return rejectRequest("temporarily suspended.");
         }
 
