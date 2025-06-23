@@ -118,7 +118,10 @@ export async function sendXrp(
     const normalizedAmount = normalizeXrpAmount(amount);
 
     // Destination Tag 검증
-    if (destinationTag !== undefined && destinationTag !== null) {
+    if (
+      destinationTag !== undefined && destinationTag !== null &&
+      destinationTag.trim() !== ""
+    ) {
       const tagNumber = parseInt(destinationTag);
       if (isNaN(tagNumber) || tagNumber < 0 || tagNumber > 4294967295) {
         throw new Error(

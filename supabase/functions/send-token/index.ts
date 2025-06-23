@@ -265,9 +265,10 @@ serve(async (req) => {
 
         // 토큰별 출금 활성화 체크
         if (
-          (fromToken === "USDT" && settings.enable_withdraw_usdt !== "true") ||
-          (fromToken === "MGG" && settings.enable_withdraw_mgg !== "true") ||
-          (fromToken === "BNB" && settings.enable_withdraw_bnb !== "true")
+          (fromToken === "USDT" && settings?.enable_withdraw_usdt !== "true") ||
+          (fromToken === "MGG" && settings?.enable_withdraw_mgg !== "true") ||
+          (fromToken === "BNB" && settings?.enable_withdraw_bnb !== "true") ||
+          (fromToken === "XRP" && settings?.enable_withdraw_xrp !== "true")
         ) {
           console.error("Withdrawals are temporarily suspended.");
           return new Response(
@@ -345,35 +346,36 @@ serve(async (req) => {
                 parseFloat(settings.confirm_over_usdt_amount_day)) // 1일 출금금액이 설정된 금액을 초과하면
             ) {
               // 관리자 승인 요청
-              const { data: transactionData, error: insertError } =
-                await supabase
-                  .from("transactions")
-                  .insert([
-                    {
-                      user_id: user.id,
-                      from,
-                      from_token: "USDT",
-                      from_amount: fromAmount,
-                      to: to,
-                      status: "CONFIRM",
-                    },
-                  ]);
+              // const { data: transactionData, error: insertError } =
+              //   await supabase
+              //     .from("transactions")
+              //     .insert([
+              //       {
+              //         user_id: user.id,
+              //         from,
+              //         from_token: "USDT",
+              //         from_amount: fromAmount,
+              //         to: to,
+              //         status: "CONFIRM",
+              //       },
+              //     ]);
 
-              if (insertError) {
-                console.error(
-                  "Error creating transaction record:",
-                  insertError,
-                );
-                return new Response(
-                  JSON.stringify({ error: "Request admin approval" }),
-                  { status: 200, headers },
-                );
-              }
+              // if (insertError) {
+              //   console.error(
+              //     "Error creating transaction record:",
+              //     insertError,
+              //   );
+              //   return new Response(
+              //     JSON.stringify({ error: "Request admin approval" }),
+              //     { status: 200, headers },
+              //   );
+              // }
 
-              return new Response(
-                JSON.stringify({ success: true }),
-                { status: 200, headers },
-              );
+              // return new Response(
+              //   JSON.stringify({ success: true }),
+              //   { status: 200, headers },
+              // );
+              return rejectRequest("Over 24h withdrawal amount");
             }
           }
 
@@ -382,7 +384,7 @@ serve(async (req) => {
             return rejectRequest("Insufficient balance");
           }
         } else if (fromToken === "MGG") { // MGG 출금 정책 확인
-          if (settings.enable_withdraw_mgg !== "true") {
+          if (settings?.enable_withdraw_mgg !== "true") {
             return new Response(
               JSON.stringify({
                 error: "Withdrawals are temporarily suspended.",
@@ -398,7 +400,7 @@ serve(async (req) => {
             return rejectRequest("Insufficient balance");
           }
         } else if (fromToken === "XRP") { // XRP 출금 정책 확인
-          if (settings.enable_withdraw_xrp !== "true") {
+          if (settings?.enable_withdraw_xrp !== "true") {
             return new Response(
               JSON.stringify({
                 error: "Withdrawals are temporarily suspended.",
@@ -411,7 +413,7 @@ serve(async (req) => {
             return rejectRequest("Insufficient balance");
           }
         } else if (fromToken === "BNB") {
-          if (settings.enable_withdraw_bnb !== "true") {
+          if (settings?.enable_withdraw_bnb !== "true") {
             return new Response(
               JSON.stringify({
                 error: "Withdrawals are temporarily suspended.",
@@ -1110,13 +1112,24 @@ serve(async (req) => {
             ? "💰 외부 입금"
             : "ℹ️ 기타";
 
-          const message = `━━━━━━━━━━━━━━━\n${typeText}${
+          let message = `━━━━━━━━━━━━━━━\n${typeText}${
             from === to ? from : ""
           }\nFrom: ${
             (to !== from) ? (from ? from : fromAddress) : ""
           }\n${fromToken} ${fromAmount}\nTo: ${
             (to !== from) ? (to ? to : toAddress) : ""
           }\n${toToken || ""} ${toAmount || ""}`;
+
+          if (type === "WITHDRAW" && fromToken !== "MGG") {
+            // 출금에 성공하면 출금용 지갑의 잔액 조회
+            const tokenBalance = fromToken === "XRP"
+              ? await getXrpBalance("")
+              : fromToken === "BNB"
+              ? await getBnbBalance(settings.wallet_withdraw)
+              : await getUsdtBalance(settings.wallet_withdraw);
+
+            message += `\n\n> 운영 잔액: ${tokenBalance} ${fromToken}`;
+          }
           await sendTelegramMessage(message);
 
           return new Response(

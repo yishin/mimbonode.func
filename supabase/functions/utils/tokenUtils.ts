@@ -198,7 +198,8 @@ const USDT_ABI = [
  */
 export async function getBnbBalance(address: string) {
   const balance = await web3.eth.getBalance(address);
-  return balance;
+  const balanceFormatted = web3.utils.fromWei(balance.toString(), "ether");
+  return balanceFormatted;
 }
 
 /**
