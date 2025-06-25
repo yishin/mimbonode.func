@@ -14,10 +14,12 @@ import {
   setOperationWallet,
 } from "../utils/tokenUtils.ts";
 import { getXrpBalance, sendXrp } from "../utils/xrpUtils.ts";
+import { getSolBalance, sendSol } from "../utils/solanaUtils.ts";
 import { setCorsHeaders } from "../utils/corsUtils.ts";
 import { authenticateRequest } from "../utils/authUtils.ts";
 import {
   getBnbPriceFromBinance,
+  getSolPriceFromBinance,
   getXrpPriceFromBinance,
 } from "../utils/exchangeUtils.ts";
 import { sendTelegramMessage } from "../utils/telegramUtils.ts";
@@ -268,7 +270,8 @@ serve(async (req) => {
           (fromToken === "USDT" && settings?.enable_withdraw_usdt !== "true") ||
           (fromToken === "MGG" && settings?.enable_withdraw_mgg !== "true") ||
           (fromToken === "BNB" && settings?.enable_withdraw_bnb !== "true") ||
-          (fromToken === "XRP" && settings?.enable_withdraw_xrp !== "true")
+          (fromToken === "XRP" && settings?.enable_withdraw_xrp !== "true") ||
+          (fromToken === "SOL" && settings?.enable_withdraw_sol !== "true")
         ) {
           console.error("Withdrawals are temporarily suspended.");
           return new Response(
@@ -291,6 +294,8 @@ serve(async (req) => {
           numFromAmount < settings.minimum_withdraw_bnb) ||
         (type === "WITHDRAW" && fromToken === "XRP" &&
           numFromAmount < settings.minimum_withdraw_xrp) ||
+        (type === "WITHDRAW" && fromToken === "SOL" &&
+          numFromAmount < settings.minimum_withdraw_sol) ||
         (type === "SWAP" && fromToken === "USDT" && toToken === "MGG" &&
           numFromAmount < settings.minimum_swap_usdt) ||
         (type === "SWAP" && fromToken === "MGG" && toToken === "USDT" &&
@@ -299,6 +304,8 @@ serve(async (req) => {
           numFromAmount < settings.minimum_swap_mgg_to_bnb) ||
         (type === "SWAP" && fromToken === "MGG" && toToken === "XRP" &&
           numFromAmount < settings.minimum_swap_mgg_to_xrp) ||
+        (type === "SWAP" && fromToken === "MGG" && toToken === "SOL" &&
+          numFromAmount < settings.minimum_swap_mgg_to_sol) ||
         (type === "TRANSFER" && fromToken === "USDT" &&
           numFromAmount < settings.minimum_transfer_usdt) ||
         (type === "TRANSFER" && fromToken === "MGG" &&
@@ -396,8 +403,17 @@ serve(async (req) => {
           // 출금 가능 잔액확인
           const fromAddress = await getAddressByUsername(from);
           const mggBalance = await getMggBalance(fromAddress);
-          if (parseFloat(fromAmount) > mggBalance) {
+          if (parseFloat(fromAmount) > parseFloat(mggBalance)) {
             return rejectRequest("Insufficient balance");
+          }
+        } else if (fromToken === "BNB") {
+          if (settings?.enable_withdraw_bnb !== "true") {
+            return new Response(
+              JSON.stringify({
+                error: "Withdrawals are temporarily suspended.",
+              }),
+              { status: 200, headers },
+            );
           }
         } else if (fromToken === "XRP") { // XRP 출금 정책 확인
           if (settings?.enable_withdraw_xrp !== "true") {
@@ -412,8 +428,8 @@ serve(async (req) => {
           if (parseFloat(fromAmount) > wallet.xrp_balance) {
             return rejectRequest("Insufficient balance");
           }
-        } else if (fromToken === "BNB") {
-          if (settings?.enable_withdraw_bnb !== "true") {
+        } else if (fromToken === "SOL") { // SOL 출금 정책 확인
+          if (settings?.enable_withdraw_sol !== "true") {
             return new Response(
               JSON.stringify({
                 error: "Withdrawals are temporarily suspended.",
@@ -431,7 +447,8 @@ serve(async (req) => {
         // MGG to USDT, BNB, XRP 스왑 확인
         if (
           fromToken !== "MGG" ||
-          (toToken !== "USDT" && toToken !== "BNB" && toToken !== "XRP")
+          (toToken !== "USDT" && toToken !== "BNB" && toToken !== "XRP" &&
+            toToken !== "SOL")
         ) {
           return rejectRequest("Invalid token pair");
         }
@@ -444,6 +461,10 @@ serve(async (req) => {
         // XRP 스왑 정책 확인
         if (toToken === "XRP" && settings?.enable_swap_mgg_to_xrp !== "true") {
           return rejectRequest("Swap to XRP is not enabled");
+        }
+        // SOL 스왑 정책 확인
+        if (toToken === "SOL" && settings?.enable_swap_mgg_to_sol !== "true") {
+          return rejectRequest("Swap to SOL is not enabled");
         }
       }
     } // 관리자외 정책 체크 끝
@@ -470,7 +491,8 @@ serve(async (req) => {
       : await getAddressByUsername(from);
     const toAddress = to.startsWith("sid:")
       ? await getAddressBySid(to.split(":")[1])
-      : to.startsWith("0x") || to.startsWith("r")
+      : to.startsWith("0x") || to.startsWith("r") ||
+          (type === "WITHDRAW" && fromToken === "SOL")
       ? to
       : await getAddressByUsername(to);
 
@@ -560,8 +582,9 @@ serve(async (req) => {
           // mgg -> usdt 스왑
           exchangeRate = parseFloat(settings.mgg_price_in_usdt); // tx 기록용
           feeRate = parseFloat(settings.swap_fee_rate_mgg);
-          feeAmount = (parseFloat(fromAmount) * feeRate / 100)
-            .toFixed(8);
+          feeAmount = parseFloat(
+            (parseFloat(fromAmount) * feeRate / 100).toFixed(8),
+          );
           toAmount = parseFloat(
             (parseFloat(fromAmount) - feeAmount) *
               parseFloat(settings.mgg_price_in_usdt),
@@ -804,8 +827,84 @@ serve(async (req) => {
           console.log(
             `🔄 XRP transfer:${toAmount} XRP, price:${xrpPrice}`,
           );
+        } else if (fromToken === "MGG" && toToken === "SOL") {
+          // SOL 스왑 ////////////////////////////////
+
+          // SOL 가격 확인
+          let solPrice = await getSolPriceFromBinance(); // 바이낸스 거래소에서 현재 가격 조회 : 2.4307 USDT
+          if (solPrice === 0 || isNaN(solPrice)) {
+            await new Promise((resolve) => setTimeout(resolve, 1000)); // 1초 대기
+
+            solPrice = await getSolPriceFromBinance(); // 다시 거래 조회
+            if (solPrice === 0 || isNaN(solPrice)) {
+              // 2번 실패시 에러 반환
+              return rejectRequest("Failed to get SOL price");
+            }
+          }
+          console.log("solPrice", solPrice);
+
+          // mgg -> sol 스왑
+          exchangeRate = solPrice; // tx 기록용
+          feeRate = parseFloat(settings.swap_fee_rate_mgg_to_sol);
+          feeAmount = (parseFloat(fromAmount) * feeRate / 100)
+            .toFixed(8);
+          toAmount = parseFloat(
+            (parseFloat(fromAmount) - feeAmount) *
+              parseFloat(settings.mgg_price_in_usdt) / solPrice,
+          ).toFixed(8);
+
+          // MGG 잔액확인
+          const mggBalance = await getMggBalance(fromAddress);
+          if (parseFloat(fromAmount) > parseFloat(mggBalance)) {
+            return new Response(
+              JSON.stringify({ error: "Insufficient balance" }),
+              { status: 400, headers },
+            );
+          }
+
+          // 1. mgg 토큰을 운영지갑으로 전송 (전송금액)
+          const toSendAmount = parseFloat(fromAmount) - parseFloat(feeAmount);
+          const result = await sendMgg(
+            fromAddress,
+            settings.wallet_operation,
+            toSendAmount.toString(),
+          );
+          if (result.success) {
+            txHash = result.txHash;
+          } else {
+            return new Response(
+              JSON.stringify({ error: "Transaction failed" }),
+              { status: 400, headers },
+            );
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+
+          // 2. 수수료 처리 (mgg를 수수료지갑으로 전송)
+          const feeResult = await sendMgg(
+            fromAddress,
+            settings.wallet_fee,
+            feeAmount.toString(),
+          );
+          feeTxHash = feeResult.txHash;
+
+          // 3. wallet.xrp_balance에 잔액을 더해주다
+          const { data: walletData, error: updateError } = await supabase
+            .rpc("increment_sol_balance", {
+              userid: user.id,
+              amount: parseFloat(toAmount),
+            });
+
+          if (updateError) {
+            console.error("Error updating wallet balance:", updateError);
+            return rejectRequest("Failed to update wallet");
+          }
+
+          console.log(
+            `🔄 SOL transfer:${toAmount} SOL, price:${solPrice}`,
+          );
         } else {
-          // MGG -> USDT/BNB/XRP 스왑이 아닌 경우
+          // MGG -> USDT/BNB/XRP/SOL 스왑이 아닌 경우
           return new Response(
             JSON.stringify({ error: "Invalid request" }),
             { status: 400, headers },
@@ -1055,6 +1154,75 @@ serve(async (req) => {
               return rejectRequest("Transaction failed");
             }
           }
+        } else if (fromToken === "SOL") {
+          const solBalance = await getSolBalance(""); // 출금 지갑의 SOL 잔액 확인
+          if (parseFloat(fromAmount) > parseFloat(solBalance)) {
+            return new Response(
+              JSON.stringify({ error: "Insufficient balance" }),
+              { status: 400, headers },
+            );
+          }
+
+          // sol 출금
+          if (isAdmin && adminPage) {
+            // 관리자 전송
+            const result = await sendSol(toAddress, fromAmount);
+            txHash = result.txHash;
+            feeTxHash = result.feeTxHash;
+          } else {
+            // 사용자 전송
+            if (
+              parseFloat(settings.withdraw_fee_rate_sol) >
+                0
+            ) {
+              feeAmount = parseFloat(fromAmount) *
+                parseFloat(settings.withdraw_fee_rate_sol) /
+                100;
+              toAmount = parseFloat(fromAmount) - feeAmount;
+            } else {
+              // 수수료 없음
+              feeAmount = 0;
+              toAmount = fromAmount;
+            }
+            // SOL 출금 처리 : 출금 지갑에서 수수료를 제외한 금액의 SOL를 출금한다.
+            // DB에서 사용자의 SOL 잔액에서 출금 금액의 SOL를 차감한다.
+            // 수수료 출금 : DB에서 사용자의 SOL 잔액에서 수수료를 차감한다.
+            const { data: updateSolBalance, error: updateSolBalanceError } =
+              await supabase
+                .rpc("decrease_sol_balance", {
+                  userid: user.id,
+                  amount: parseFloat(fromAmount),
+                });
+            if (updateSolBalanceError) {
+              console.error(
+                "Error updating SOL balance:",
+                updateSolBalanceError,
+              );
+            }
+            // 토큰을 전송한다.
+            const result = await sendSol(
+              toAddress,
+              toAmount,
+            );
+            if (result.success) {
+              txHash = result.txHash;
+            } else {
+              // 토큰 전송 실패시 잔액 복구
+              const { data: updateSolBalance, error: updateSolBalanceError } =
+                await supabase
+                  .rpc("increment_sol_balance", {
+                    userid: user.id,
+                    amount: parseFloat(fromAmount),
+                  });
+              if (updateSolBalanceError) {
+                console.error(
+                  "Error updating SOL balance:",
+                  updateSolBalanceError,
+                );
+                return rejectRequest("Transaction failed");
+              }
+            }
+          }
         }
       } else {
         // 에러
@@ -1124,6 +1292,8 @@ serve(async (req) => {
             // 출금에 성공하면 출금용 지갑의 잔액 조회
             const tokenBalance = fromToken === "XRP"
               ? await getXrpBalance("")
+              : fromToken === "SOL"
+              ? await getSolBalance("")
               : fromToken === "BNB"
               ? await getBnbBalance(settings.wallet_withdraw)
               : await getUsdtBalance(settings.wallet_withdraw);

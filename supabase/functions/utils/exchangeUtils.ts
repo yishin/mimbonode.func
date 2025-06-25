@@ -33,3 +33,21 @@ export async function getXrpPriceFromBinance() {
         return 0;
     }
 }
+
+/**
+ * getSolPriceFromBinance
+ *
+ * @returns {Number} SOL 가격
+ */
+export async function getSolPriceFromBinance() {
+    try {
+        const res = await fetch(
+            "https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT",
+        );
+        const data = await res.json();
+        return parseFloat(data.price);
+    } catch (err) {
+        console.error("Fetching SOL price failed:", err);
+        return 0;
+    }
+}
