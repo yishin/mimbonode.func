@@ -26,6 +26,7 @@ import {
   failFunctionCall,
   trackFunctionCall,
 } from "../utils/trackUtils.ts";
+import { sendTelegramMessage } from "../utils/telegramUtils.ts";
 
 // Edge Function 시작
 serve(async (req) => {
@@ -36,203 +37,191 @@ serve(async (req) => {
     return new Response(null, { status: 200, headers });
   }
 
-  // 현재 날짜 정보 가져오기
-  const now = new Date();
-  const lastMonth = new Date(now);
-  lastMonth.setMonth(now.getMonth() - 1);
-
-  const year = lastMonth.getFullYear();
-  const month = lastMonth.getMonth() + 1; // JavaScript에서 월은 0부터 시작
-
-  // 지난달의 시작일과 종료일 계산
-  const startDate = new Date(year, month - 1, 1);
-  const endDate = new Date(year, month, 0);
-
-  // 함수 호출 파라미터
-  const functionParams = {
-    period: `${year}-${month.toString().padStart(2, "0")}`,
-    startDate: startDate.toISOString(),
-    endDate: endDate.toISOString(),
-  };
-
   // 함수 호출 추적 시작
   const callId = await trackFunctionCall(
     "special-bonus",
-    functionParams,
+    { description: "Special bonus distribution" },
   );
 
   // 메타데이터 초기화
   const metadata = {
     start_time: new Date().toISOString(),
-    period: `${year}-${month}`,
-    description: `Special bonus for ${year}-${month}`,
+    description: "Special bonus distribution",
   };
 
-  console.log(
-    `Processing rewards for period: ${startDate.toISOString()} to ${endDate.toISOString()}`,
-  );
+  console.log("Starting special bonus distribution...");
   console.log(`Function call tracked with ID: ${callId}`);
 
   // 결과 추적을 위한 변수들
-  let result = {};
+  let result: any = {};
   let totalRewardAmount = 0;
   let totalUsersRewarded = 0;
-  const levelStats = {};
+  const levelStats: any = {};
 
   try {
-    //
     const settings = await getSettings();
     setOperationWallet(settings.wallet_operation);
 
-    // 1달이내 실행한 이력이 있는지 확인
+    // 1. RPC 함수를 사용하여 이전달의 mining 합계 구하기
+    const { data: miningSum, error: miningSumError } = await supabase
+      .rpc("sum_mining_early_month");
+
+    if (miningSumError) {
+      console.error("Error fetching mining sum:", miningSumError);
+      throw new Error(`Failed to fetch mining sum: ${miningSumError.message}`);
+    }
+
+    if (!miningSum || miningSum.length === 0) {
+      throw new Error("No mining data found for last month");
+    }
+
+    const miningData = miningSum[0];
+    const totalMiningAmount = parseFloat(miningData.total_amount) || 0;
+    const period = miningData.period;
+    const startDate = miningData.start_date;
+    const endDate = miningData.end_date;
+
+    console.log(`Mining data for period ${period}:`);
+    console.log(`Total mining amount: ${totalMiningAmount}`);
+    console.log(`Period: ${startDate} to ${endDate}`);
+
+    // 2. 이번달에 이미 실행된 이력이 있는지 확인
+    const now = new Date();
+    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+
     const { data: lastExecution, error: lastExecutionError } = await supabase
       .from("edge_function_calls")
-      .select("count")
+      .select("*")
       .eq("function_name", "special-bonus")
       .eq("status", "completed")
-      .gte("started_at", endDate.toISOString());
+      .gte("started_at", thisMonthStart.toISOString())
+      .lt("started_at", nextMonthStart.toISOString());
 
     if (lastExecutionError) {
-      console.error("Error fetching last execution:", lastExecutionError);
+      console.error("Error checking last execution:", lastExecutionError);
     }
 
-    if (lastExecution?.[0]?.count > 0) {
-      console.log("Last execution found for this period");
-      throw new Error("Last execution found for this period");
+    if (lastExecution && lastExecution.length > 0) {
+      console.log("Special bonus already executed for this period");
+      throw new Error("Special bonus already executed for this period");
     }
 
-    // 각 레벨(1-6)에 대해 처리
-    for (let level = 4; level <= 6; level++) {
+    // 3. 각 레벨별 보상 금액 계산 (전체 mining 합계의 1%씩)
+    const rewardAmountPerLevel = totalMiningAmount * 0.01;
+    console.log(`Reward amount per level (1%): ${rewardAmountPerLevel}`);
+
+    if (rewardAmountPerLevel <= 0) {
+      throw new Error("No rewards to distribute");
+    }
+
+    // 4. 각 레벨(4,5,6)의 사용자 조회 및 보상 지급
+    const targetLevels = [4, 5, 6];
+
+    for (const level of targetLevels) {
       console.log(`Processing level ${level}...`);
 
-      // 1. 해당 레벨의 지난달 mining 총액 계산
-      const { data: miningData, error: miningError } = await supabase
-        .from("mining")
-        .select("amount")
-        .eq("user_level", level)
-        .gte("created_at", startDate.toISOString())
-        .lt("created_at", endDate.toISOString());
-
-      if (miningError) {
-        console.error(
-          `Error fetching mining data for level ${level}:`,
-          miningError,
-        );
-        levelStats[`level_${level}`] = { error: miningError.message };
-        continue;
-      }
-
-      // 총 마이닝 금액 계산
-      const totalAmount = miningData.reduce(
-        (sum, item) => sum + (item.amount || 0),
-        0,
-      );
-      console.log(`Total mining amount for level ${level}: ${totalAmount}`);
-
-      // 보상 금액 계산 (총액의 1%)
-      const rewardAmount = totalAmount * 0.01;
-      console.log(`Reward amount (1%): ${rewardAmount}`);
-
-      if (rewardAmount <= 0) {
-        console.log(`No rewards to distribute for level ${level}`);
-        levelStats[`level_${level}`] = {
-          totalAmount: totalAmount,
-          rewardAmount: 0,
-          userCount: 0,
-          status: "no_rewards",
-        };
-        continue;
-      }
-
-      // 2. 해당 레벨의 사용자 수 계산
-      const { data: users, error: usersError } = await supabase
-        .from("mining")
+      // 해당 레벨의 사용자들 조회
+      const { data: levelUsers, error: levelUsersError } = await supabase
+        .from("profiles")
         .select("user_id")
         .eq("user_level", level);
 
-      if (usersError) {
-        console.error(`Error fetching users for level ${level}:`, usersError);
+      if (levelUsersError) {
+        console.error(
+          `Error fetching users for level ${level}:`,
+          levelUsersError,
+        );
         levelStats[`level_${level}`] = {
-          totalAmount: totalAmount,
-          rewardAmount: rewardAmount,
-          error: usersError.message,
+          userCount: 0,
+          status: "error",
+          error: levelUsersError.message,
+          successCount: 0,
+          failCount: 0,
         };
         continue;
       }
-      const uniqueUserIds = new Set();
-      users?.forEach((item) => {
-        uniqueUserIds.add(item.user_id);
-      });
 
-      const userCount = uniqueUserIds.size;
-      console.log(`Number of users at level ${level}: ${userCount}`);
+      const userCount = levelUsers?.length || 0;
+      console.log(`Level ${level}: ${userCount} users`);
 
       if (userCount === 0) {
-        console.log(`No users to distribute rewards for level ${level}`);
+        console.log(`No users found for level ${level}`);
         levelStats[`level_${level}`] = {
-          totalAmount: totalAmount,
-          rewardAmount: rewardAmount,
           userCount: 0,
           status: "no_users",
+          successCount: 0,
+          failCount: 0,
         };
         continue;
       }
 
-      // 3. 사용자당 보상 금액 계산
-      const rewardPerUser = rewardAmount / userCount;
-      console.log(`Reward per user: ${rewardPerUser}`);
+      // 레벨별 사용자당 보상 금액 계산
+      const rewardPerUser = rewardAmountPerLevel / userCount;
+      console.log(`Level ${level} reward per user: ${rewardPerUser}`);
 
       // 레벨 통계 초기화
       levelStats[`level_${level}`] = {
-        totalAmount: totalAmount,
-        rewardAmount: rewardAmount,
         userCount: userCount,
+        rewardPerLevel: rewardAmountPerLevel,
         rewardPerUser: rewardPerUser,
         successCount: 0,
         failCount: 0,
         users: [],
       };
 
-      // 4. 각 사용자에게 보상 지급
-      for (const userid of uniqueUserIds) {
-        console.log(`Sending ${rewardPerUser} MGG to user ${userid}`);
+      // 각 사용자에게 보상 지급
+      for (const userRecord of levelUsers) {
+        const userId = userRecord.user_id;
+        console.log(
+          `Sending ${rewardPerUser} MGG to user ${userId} (level ${level})`,
+        );
 
         try {
           const { data: userData, error: userError } = await supabase
             .from("wallets")
             .select("address")
-            .eq("user_id", userid)
+            .eq("user_id", userId)
             .single();
 
           if (userError) {
             console.error(
-              `Error fetching user data for user ${userid}:`,
+              `Error fetching user data for user ${userId}:`,
               userError,
             );
+            levelStats[`level_${level}`].failCount++;
+            levelStats[`level_${level}`].users.push({
+              user_id: userId,
+              status: "failed",
+              error: userError.message,
+            });
             continue;
           }
 
           const toAddress = userData.address;
           // sendMgg 함수 호출하여 토큰 전송
-          const { success } = await sendMgg(
+          const sendResult = await sendMgg(
             settings.wallet_operation,
             toAddress,
-            rewardPerUser,
+            rewardPerUser.toString(),
           );
 
-          if (!success) {
-            console.error(`Error sending MGG to user ${userid}:`);
+          if (!sendResult || !sendResult.success) {
+            console.error(
+              `Error sending MGG to user ${userId}:`,
+              sendResult?.error,
+            );
             levelStats[`level_${level}`].failCount++;
             levelStats[`level_${level}`].users.push({
-              user_id: userid,
+              user_id: userId,
               status: "failed",
-              error: sendError.message,
+              error: sendResult?.error || "Unknown error",
             });
             continue;
           }
 
           console.log(
-            `Successfully sent MGG to user ${userid}:`,
+            `Successfully sent MGG to user ${userId}:`,
             rewardPerUser,
           );
           levelStats[`level_${level}`].successCount++;
@@ -241,7 +230,7 @@ serve(async (req) => {
 
           // 사용자 통계 추가
           levelStats[`level_${level}`].users.push({
-            user_id: userid,
+            user_id: userId,
             status: "success",
             amount: rewardPerUser,
           });
@@ -250,28 +239,30 @@ serve(async (req) => {
           const { error: commissionError } = await supabase
             .from("commissions")
             .insert({
-              user_id: userid,
+              user_id: userId,
               type: "special bonus",
               wallet: "MGG",
               amount: rewardPerUser,
-              message: `Speical bonus for level ${level} (${year}-${month})`,
-              total_amount: rewardAmount,
+              message: `Special bonus for level ${level} (${period})`,
+              total_amount: rewardAmountPerLevel,
               person_count: userCount,
             });
 
           if (commissionError) {
             console.error(
-              `Error recording commission for user ${userid}:`,
+              `Error recording commission for user ${userId}:`,
               commissionError,
             );
           }
         } catch (userError) {
-          console.error(`Exception processing user ${userid}:`, userError);
+          console.error(`Exception processing user ${userId}:`, userError);
           levelStats[`level_${level}`].failCount++;
           levelStats[`level_${level}`].users.push({
-            user_id: user.id,
+            user_id: userId,
             status: "error",
-            error: userError.message,
+            error: userError instanceof Error
+              ? userError.message
+              : "Unknown error",
           });
         }
       }
@@ -282,13 +273,55 @@ serve(async (req) => {
     // 결과 객체 생성
     result = {
       success: true,
+      period,
+      totalMiningAmount,
+      rewardAmountPerLevel,
       totalRewardAmount,
       totalUsersRewarded,
       levelStats,
     };
+
+    // 텔레그램으로 결과 전송
+    let telegramMessage = `🎉 **특별 보너스 지급 완료**\n\n`;
+    telegramMessage += `📅 **기간**: ${period}\n`;
+    telegramMessage += `⛏️ **총 채굴량**: ${
+      totalMiningAmount.toFixed(2)
+    } MGG\n`;
+    telegramMessage += `💰 **레벨별 지급량**: ${
+      rewardAmountPerLevel.toFixed(2)
+    } MGG (1%)\n`;
+    telegramMessage += `👥 **총 지급 사용자**: ${totalUsersRewarded}명\n`;
+    telegramMessage += `💸 **총 지급액**: ${
+      totalRewardAmount.toFixed(2)
+    } MGG\n\n`;
+
+    telegramMessage += `📊 **레벨별 지급 현황**:\n`;
+    for (const level of [4, 5, 6]) {
+      const stats = levelStats[`level_${level}`];
+      if (stats) {
+        telegramMessage += `\n🔹 **Level ${level}**\n`;
+        telegramMessage += `   👤 사용자 수: ${stats.userCount}명\n`;
+        if (stats.userCount > 0) {
+          telegramMessage += `   💎 개별 지급액: ${
+            stats.rewardPerUser?.toFixed(4)
+          } MGG\n`;
+        }
+        telegramMessage += `   ✅ 성공: ${stats.successCount}명\n`;
+        telegramMessage += `   ❌ 실패: ${stats.failCount}명\n`;
+      }
+    }
+
+    try {
+      await sendTelegramMessage(telegramMessage);
+    } catch (telegramError) {
+      console.error("Error sending telegram message:", telegramError);
+    }
+
     // 함수 호출 완료 추적
     await completeFunctionCall(callId, result, {
       ...metadata,
+      period,
+      totalMiningAmount,
       totalRewardAmount,
       totalUsersRewarded,
     });
@@ -298,8 +331,11 @@ serve(async (req) => {
         success: true,
         message: "Special bonus distributed successfully",
         callId: callId,
+        period: period,
+        totalMiningAmount: totalMiningAmount,
         totalRewardAmount: totalRewardAmount,
         totalUsersRewarded: totalUsersRewarded,
+        levelStats: levelStats,
       }),
       {
         headers: { ...headers, "Content-Type": "application/json" },
@@ -307,13 +343,24 @@ serve(async (req) => {
       },
     );
   } catch (error) {
-    console.error("Error processing special bonus:", error);
+    console.error(
+      "Error processing special bonus:",
+      error instanceof Error ? error.message : error,
+    );
 
     // 함수 호출 실패 추적
-    await failFunctionCall(callId, error, metadata);
+    await failFunctionCall(
+      callId,
+      error instanceof Error ? error.message : "Unknown error",
+      metadata,
+    );
 
     return new Response(
-      JSON.stringify({ success: false, error: error.message, callId: callId }),
+      JSON.stringify({
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error",
+        callId: callId,
+      }),
       {
         headers: { ...headers, "Content-Type": "application/json" },
         status: 500,
