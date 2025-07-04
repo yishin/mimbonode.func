@@ -203,12 +203,41 @@ serve(async (req) => {
       );
     }
 
+    // 사용자의 my_packages 조회 : status = "active"
+    const { data: myPackages, error: myPackagesError } = await supabase
+      .from("mypackages")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("status", "active")
+      .order("sid", { ascending: true });
+
+    if (myPackagesError || !myPackages || myPackages.length === 0) {
+      console.error("Error fetching my packages:", myPackagesError);
+      return new Response(
+        JSON.stringify({ error: "Internal server error" }),
+        { status: 500, headers },
+      );
+    }
+
     ////////////////////////////////
     // 현재 시간 가져오기
     const currentTime = new Date();
 
     // harvest 시간 계산 : 현재시간 - profile.last_harvest_time을 초로 환상
-    const lastHarvestTime = new Date(profile.last_harvest);
+    const lastHarvestTime = new Date(
+      profile?.last_harvest ? profile.last_harvest : myPackages[0].created_at,
+    );
+
+    // 2025년 4월 이전이면 에러 처리
+    const minDate = new Date("2025-04-01");
+    if (lastHarvestTime < minDate) {
+      console.error("Invalid harvest time");
+      return new Response(
+        JSON.stringify({ error: "Invalid harvest time" }),
+        { status: 400, headers },
+      );
+    }
+
     const timeDiff = currentTime.getTime() - lastHarvestTime.getTime();
     const secondsDiff = Math.floor(timeDiff / 1000);
 
@@ -228,22 +257,6 @@ serve(async (req) => {
     ////////////////////////////////////////////////////////////////
     // 채굴 처리
     ////////////////////////////////////////////////////////////////
-
-    // 사용자의 my_packages 조회 : status = "active"
-    const { data: myPackages, error: myPackagesError } = await supabase
-      .from("mypackages")
-      .select("*")
-      .eq("user_id", user.id)
-      .eq("status", "active")
-      .order("sid", { ascending: true });
-
-    if (myPackagesError) {
-      console.error("Error fetching my packages:", myPackagesError);
-      return new Response(
-        JSON.stringify({ error: "Internal server error" }),
-        { status: 500, headers },
-      );
-    }
 
     // Haverst (mining) package별 채굴량 가감/트랜잭션 기록 생성
     let totalMined = 0; // 총 채굴량
