@@ -228,8 +228,8 @@ serve(async (req) => {
       profile?.last_harvest ? profile.last_harvest : myPackages[0].created_at,
     );
 
-    // 2025년 4월 이전이면 에러 처리
-    const minDate = new Date("2025-04-01");
+    // 2025년 3월 18일 이전이면 에러 처리
+    const minDate = new Date("2025-03-18");
     if (lastHarvestTime < minDate) {
       console.error("Invalid harvest time");
       return new Response(
