@@ -22,7 +22,7 @@ import {
   getSolPriceFromBinance,
   getXrpPriceFromBinance,
 } from "../utils/exchangeUtils.ts";
-import { sendTelegramMessage } from "../utils/telegramUtils.ts";
+import { sendTelegramMessage, sendBlockMessage } from "../utils/telegramUtils.ts";
 import { verifyTurnstileToken } from "../utils/turnstileUtils.ts";
 
 // Edge Function 시작
@@ -265,7 +265,7 @@ serve(async (req) => {
           // return rejectRequest("temporarily suspended.");
 
           // 사용자 차단은 하지 않고 텔레그램 메시지로 알림만 보내기
-          sendTelegramMessage(
+          sendBlockMessage(
             `🚫 No feeding and no packages user: ${profile.username}`,
           );
         }
@@ -1361,13 +1361,13 @@ async function blockUser(userId: string, reason: string) {
   if (userError) {
     console.error("Error blocking user:", userError);
 
-    await sendTelegramMessage(
+    await sendBlockMessage(
       `🚫 사용자 차단 실패: ${userData?.username}(${userId}) ${userError.message}`,
     );
     return;
   }
 
-  await sendTelegramMessage(
+  await sendBlockMessage(
     `🚫 사용자 차단: ${userData?.username} (${userId}) ${reason}`,
   );
 }
