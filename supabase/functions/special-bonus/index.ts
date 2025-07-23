@@ -174,55 +174,39 @@ serve(async (req) => {
       for (const userRecord of levelUsers) {
         const userId = userRecord.user_id;
         console.log(
-          `Sending ${rewardPerUser} MGG to user ${userId} (level ${level})`,
+          `Adding ${rewardPerUser} to matching bonus for user ${userId} (level ${level})`,
         );
 
         try {
-          const { data: userData, error: userError } = await supabase
-            .from("wallets")
-            .select("address")
-            .eq("user_id", userId)
-            .single();
-
-          if (userError) {
-            console.error(
-              `Error fetching user data for user ${userId}:`,
-              userError,
-            );
-            levelStats[`level_${level}`].failCount++;
-            levelStats[`level_${level}`].users.push({
-              user_id: userId,
-              status: "failed",
-              error: userError.message,
-            });
-            continue;
-          }
-
-          const toAddress = userData.address;
-          // sendMgg 함수 호출하여 토큰 전송
-          const sendResult = await sendMgg(
-            settings.wallet_operation,
-            toAddress,
-            rewardPerUser.toString(),
+          // profiles 테이블의 matching_bonus 업데이트
+          const { error: profileUpdateError } = await supabase.rpc(
+            "increment_matching_bonus",
+            {
+              username: "",
+              userid: userId,
+              amount: rewardPerUser,
+              bonus_rate: 1,
+              mining_total: rewardAmountPerLevel,
+              transfer_amount: rewardPerUser,
+            },
           );
 
-          if (!sendResult || !sendResult.success) {
+          if (profileUpdateError) {
             console.error(
-              `Error sending MGG to user ${userId}:`,
-              sendResult?.error,
+              `Error updating matching_bonus for user ${userId}:`,
+              profileUpdateError,
             );
             levelStats[`level_${level}`].failCount++;
             levelStats[`level_${level}`].users.push({
               user_id: userId,
               status: "failed",
-              error: sendResult?.error || "Unknown error",
+              error: profileUpdateError.message,
             });
             continue;
           }
 
           console.log(
-            `Successfully sent MGG to user ${userId}:`,
-            rewardPerUser,
+            `Successfully updated matching bonus for user ${userId}: +${rewardPerUser}`,
           );
           levelStats[`level_${level}`].successCount++;
           totalUsersRewarded++;
@@ -289,11 +273,11 @@ serve(async (req) => {
     } MGG\n`;
     telegramMessage += `💰 **레벨별 지급량**: ${
       rewardAmountPerLevel.toFixed(2)
-    } MGG (1%)\n`;
+    } POINT (1%)\n`;
     telegramMessage += `👥 **총 지급 사용자**: ${totalUsersRewarded}명\n`;
     telegramMessage += `💸 **총 지급액**: ${
       totalRewardAmount.toFixed(2)
-    } MGG\n\n`;
+    } POINT\n\n`;
 
     telegramMessage += `📊 **레벨별 지급 현황**:\n`;
     for (const level of [4, 5, 6]) {
@@ -304,7 +288,7 @@ serve(async (req) => {
         if (stats.userCount > 0) {
           telegramMessage += `   💎 개별 지급액: ${
             stats.rewardPerUser?.toFixed(4)
-          } MGG\n`;
+          } POINT\n`;
         }
         telegramMessage += `   ✅ 성공: ${stats.successCount}명\n`;
         telegramMessage += `   ❌ 실패: ${stats.failCount}명\n`;
