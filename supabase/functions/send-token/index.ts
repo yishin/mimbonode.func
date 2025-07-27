@@ -22,7 +22,10 @@ import {
   getSolPriceFromBinance,
   getXrpPriceFromBinance,
 } from "../utils/exchangeUtils.ts";
-import { sendTelegramMessage, sendBlockMessage } from "../utils/telegramUtils.ts";
+import {
+  sendBlockMessage,
+  sendTelegramMessage,
+} from "../utils/telegramUtils.ts";
 import { verifyTurnstileToken } from "../utils/turnstileUtils.ts";
 
 // Edge Function 시작
@@ -496,7 +499,7 @@ serve(async (req) => {
       : await getAddressByUsername(from);
     const toAddress = to.startsWith("sid:")
       ? await getAddressBySid(to.split(":")[1])
-      : to.startsWith("0x") || to.startsWith("r") ||
+      : to.startsWith("0x") || (to.startsWith("r") && to.length >= 25) ||
           (type === "WITHDRAW" && fromToken === "SOL")
       ? to
       : await getAddressByUsername(to);
