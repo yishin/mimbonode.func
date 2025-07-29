@@ -1306,7 +1306,27 @@ serve(async (req) => {
               ? await getBnbBalance(settings.wallet_withdraw)
               : await getUsdtBalance(settings.wallet_withdraw);
 
-            message += `\n\n> 운영 잔액: ${tokenBalance} ${fromToken}`;
+            const tokenBalanceText = fromToken === "XRP"
+              ? tokenBalance.toLocaleString("en-US", {
+                minimumFractionDigits: 6,
+                maximumFractionDigits: 6,
+              })
+              : fromToken === "SOL"
+              ? tokenBalance.toLocaleString("en-US", {
+                minimumFractionDigits: 9,
+                maximumFractionDigits: 9,
+              })
+              : fromToken === "BNB"
+              ? tokenBalance.toLocaleString("en-US", {
+                minimumFractionDigits: 8,
+                maximumFractionDigits: 8,
+              })
+              : tokenBalance.toLocaleString("en-US", {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              });
+
+            message += `\n\n> 운영 잔액: ${tokenBalanceText} ${fromToken}`;
           }
           await sendTelegramMessage(message);
 
