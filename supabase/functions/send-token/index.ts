@@ -636,7 +636,25 @@ serve(async (req) => {
               { status: 400, headers },
             );
           }
-          // 1. mgg 토큰을 운영지갑으로 전송 (전송금액)
+          // 1. 수수료 처리
+          const feeResult = await sendMgg(
+            fromAddress,
+            settings.wallet_fee,
+            feeAmount.toString(),
+          );
+          if (feeResult.success) {
+            feeTxHash = feeResult.txHash;
+          } else {
+            console.error("❗ Error sending MGG fee:", feeResult.error);
+            return new Response(
+              JSON.stringify({ error: "Transaction failed" }),
+              { status: 400, headers },
+            );
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+
+          // 2. mgg 토큰을 운영지갑으로 전송 (전송금액)
           const toSendAmount = parseFloat(fromAmount) - parseFloat(feeAmount);
           const result = await sendMgg(
             fromAddress,
@@ -647,24 +665,6 @@ serve(async (req) => {
             txHash = result.txHash;
           } else {
             console.error("❗ Error sending MGG:", result.error);
-            return new Response(
-              JSON.stringify({ error: "Transaction failed" }),
-              { status: 400, headers },
-            );
-          }
-
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-
-          // 2. 수수료 처리
-          const feeResult = await sendMgg(
-            fromAddress,
-            settings.wallet_fee,
-            feeAmount.toString(),
-          );
-          if (feeResult.success) {
-            feeTxHash = feeResult.txHash;
-          } else {
-            console.error("❗ Error sending MGG fee:", feeResult.error);
             return new Response(
               JSON.stringify({ error: "Transaction failed" }),
               { status: 400, headers },
