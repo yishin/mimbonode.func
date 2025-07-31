@@ -3,6 +3,8 @@ import { serve } from "https://deno.land/std@0.131.0/http/server.ts";
 import { supabase } from "../utils/supabaseClient.ts";
 import { setCorsHeaders } from "../utils/corsUtils.ts";
 
+const sendUsers = ["urus6000"];
+
 console.log("Report Node Sales function started");
 
 // 텔레그램 관련 설정
@@ -45,7 +47,7 @@ function getDateRange(date: Date, days = 0) {
   };
 }
 
-// 월별 집계 범위 계산 (전월 11일 ~ 현재월 10일)
+// 월별 집계 범위 계산 (전월 10일 ~ 현재월 9일)
 function getMonthlyReportRange(
   yesterday: Date,
 ): { startDate: Date; endDate: Date; periodTitle: string } {
@@ -59,25 +61,25 @@ function getMonthlyReportRange(
 
   let startYear = year;
   let startMonth = month;
-  let endYear = year;
-  let endMonth = month;
+  let _endYear = year;
+  let _endMonth = month;
 
-  // 어제가 10일 이하인지 확인
-  if (day <= 10) {
-    // 이전월 11일 ~ 현재월 10일 (어제까지)
+  // 어제가 9일 이하인지 확인
+  if (day <= 9) {
+    // 이전월 10일 ~ 현재월 9일 (어제까지)
     startMonth = month - 1;
     if (startMonth < 0) {
       startMonth = 11; // 12월
       startYear--;
     }
   } else {
-    // 현재월 11일 ~ 어제까지
-    endMonth = month;
-    endYear = year;
+    // 현재월 10일 ~ 어제까지
+    _endMonth = month;
+    _endYear = year;
   }
 
   // 날짜 범위 설정 (한국 시간 기준)
-  const startDate = new Date(Date.UTC(startYear, startMonth, 11)); // 시작월 11일
+  const startDate = new Date(Date.UTC(startYear, startMonth, 10)); // 시작월 10일
   const endDate = new Date(yesterday.getTime()); // 어제 날짜까지
 
   // 시작일이 초기 기준일(2025-04-16)보다 이전이면 초기 기준일로 조정
@@ -132,8 +134,12 @@ async function sendTelegramMessage(message: string) {
   }
 }
 
-interface SalesItem {
+interface PackageSalesItem {
   price: number;
+}
+
+interface SalesItem {
+  to_amount: number;
 }
 
 // 판매 보고서 생성 및 전송
@@ -187,56 +193,88 @@ async function generateAndSendReport() {
       return { success: false, error: monthlyError.message };
     }
 
-    // 총 누적 판매 데이터 쿼리 (2025년 4월 16일부터 어제까지)
-    const { data: totalData, error: totalError } = await supabase
-      .from("mypackages")
-      .select("price")
-      .eq("is_free", false)
-      .gte("purchase_date", INITIAL_START_DATE.toISOString())
-      .lt("purchase_date", yesterday.end.toISOString());
+    // 영업지원 금액 데이터 쿼리 - 일일
+    const { data: dailySalesData, error: dailySalesError } = await supabase
+      .from("transactions")
+      .select("to_amount")
+      .in("from", sendUsers)
+      .eq("transaction_type", "TRANSFER")
+      .eq("to_token", "USDT")
+      .gte("created_at", yesterday.start.toISOString())
+      .lt("created_at", yesterday.end.toISOString());
 
-    if (totalError) {
-      console.error("Error fetching total sales data:", totalError);
-      return { success: false, error: totalError.message };
+    if (dailySalesError) {
+      console.error(
+        "Error fetching daily sales support funds:",
+        dailySalesError,
+      );
+      return { success: false, error: dailySalesError.message };
     }
 
+    // 영업지원 금액 데이터 쿼리 - 월별
+    const { data: monthlySalesData, error: monthlySalesError } = await supabase
+      .from("transactions")
+      .select("to_amount")
+      .in("from", sendUsers)
+      .eq("transaction_type", "TRANSFER")
+      .eq("to_token", "USDT")
+      .gte("created_at", monthlyStartDate.toISOString())
+      .lt("created_at", yesterday.end.toISOString());
+
+    if (monthlySalesError) {
+      console.error(
+        "Error fetching monthly sales support funds:",
+        monthlySalesError,
+      );
+      return { success: false, error: monthlySalesError.message };
+    }
+
+    // 영업지원 금액 계산
+    const dailySalesTotal = (dailySalesData as SalesItem[])?.reduce(
+      (sum: number, item: SalesItem) => sum + (Number(item.to_amount) || 0),
+      0,
+    ) || 0;
+
+    const monthlySalesTotal = (monthlySalesData as SalesItem[])?.reduce(
+      (sum: number, item: SalesItem) => sum + (Number(item.to_amount) || 0),
+      0,
+    ) || 0;
+
     // 판매 금액 계산
-    const dailyTotal = (dailyData as SalesItem[]).reduce(
-      (sum: number, item: SalesItem) => sum + (Number(item.price) || 0),
+    const dailyTotal = (dailyData as PackageSalesItem[]).reduce(
+      (sum: number, item: PackageSalesItem) => sum + (Number(item.price) || 0),
       0,
     );
-    const dailyFeeAmount = dailyTotal * 0.03; // 3% 수수료
+    const dailyFeeAmount = (dailyTotal - dailySalesTotal) * 0.03; // 3% 수수료
 
-    const monthlyTotal = (monthlyData as SalesItem[]).reduce(
-      (sum: number, item: SalesItem) => sum + (Number(item.price) || 0),
+    const monthlyTotal = (monthlyData as PackageSalesItem[]).reduce(
+      (sum: number, item: PackageSalesItem) => sum + (Number(item.price) || 0),
       0,
     );
-    const monthlyFeeAmount = monthlyTotal * 0.03; // 3% 수수료
-
-    const grandTotal = (totalData as SalesItem[]).reduce(
-      (sum: number, item: SalesItem) => sum + (Number(item.price) || 0),
-      0,
-    );
-    const grandTotalFeeAmount = grandTotal * 0.03; // 3% 수수료
+    const monthlyFeeAmount = (monthlyTotal - monthlySalesTotal) * 0.03; // 3% 수수료
 
     // 메시지 생성 (날짜를 한국 시간으로 표시)
     const message = `
-<b>📊 일일 노드 판매 보고서 (${yesterday.startStr} KST)</b>
+<b>📊 노드 판매 보고서</b>
 
-<b>어제 판매 현황:</b>
-총 판매액: ${dailyTotal.toLocaleString()} USDT
-3% 수수료: ${dailyFeeAmount.toLocaleString()} USDT
-판매 건수: ${dailyData.length}건
+<b>1. 어제 판매 현황:</b>
+(${yesterday.startStr} KST)
+
+총 판매액: ${dailyTotal.toLocaleString()} USDT (${dailyData.length || 0}건)
+총 영업지원: ${dailySalesTotal.toLocaleString()} USDT (${
+      (dailySalesData as SalesItem[])?.length || 0
+    }건)
+실 판매: ${(dailyTotal - dailySalesTotal).toLocaleString()} USDT
+정산(3%): ${dailyFeeAmount.toLocaleString()} USDT
+
+<b>2. 월별 판매 현황</b>
+(${monthlyPeriodTitle})
+
+총 판매액: ${monthlyTotal.toLocaleString()} USDT
+총 영업지원: ${monthlySalesTotal.toLocaleString()} USDT
+총 실 판매: ${(monthlyTotal - monthlySalesTotal).toLocaleString()} USDT
+총 정산(3%): ${monthlyFeeAmount.toLocaleString()} USDT
 `;
-    // <b>2. 월별 판매 현황 (${monthlyPeriodTitle}):</b>
-    // 총 판매액: ${monthlyTotal.toLocaleString()} USDT
-    // 2% 수수료: ${monthlyFeeAmount.toLocaleString()} USDT
-    // 총 판매 건수: ${monthlyData.length}건
-
-    // <b>3. 전체 누적 현황 (2025-04-16 ~ ${yesterday.endStr}):</b>
-    // 총 판매액: ${grandTotal.toLocaleString()} USDT
-    // 2% 수수료: ${grandTotalFeeAmount.toLocaleString()} USDT
-    // 총 판매 건수: ${totalData.length}건
 
     // 텔레그램으로 전송
     await sendTelegramMessage(message);
@@ -248,13 +286,14 @@ async function generateAndSendReport() {
       daily_total: dailyTotal,
       daily_fee: dailyFeeAmount,
       daily_count: dailyData.length,
+      daily_sales_total: dailySalesTotal,
+      daily_sales_count: (dailySalesData as SalesItem[])?.length || 0,
       monthly_period: monthlyPeriodTitle,
       monthly_total: monthlyTotal,
       monthly_fee: monthlyFeeAmount,
       monthly_count: monthlyData.length,
-      grand_total: grandTotal,
-      grand_total_fee: grandTotalFeeAmount,
-      grand_total_count: totalData.length,
+      monthly_sales_total: monthlySalesTotal,
+      monthly_sales_count: (monthlySalesData as SalesItem[])?.length || 0,
     };
   } catch (error) {
     console.error("Error generating report:", error);
