@@ -241,8 +241,27 @@ serve(async (req) => {
     const isAdmin = profile.user_role === "admin";
 
     // 관리자는 제한없음
-    if (!isAdmin) {
-      // 기본 사항 체크
+    if (isAdmin) {
+      // 관리자 정책확인 : 운영환경에서는 출금 가능 계정만 출금가능
+      if (Deno.env.get("ENV") === "production") {
+        // 운영
+        if (user.email !== "top4035702@gmail.com") {
+          console.log("🚫 Withdrawals are temporarily suspended.");
+          return rejectRequest("Withdrawals are temporarily suspended.");
+        }
+      } else {
+        // 개발
+        if (
+          user.email !== "top5702@hanmail.net" &&
+          user.email !== "yishin70@gmail.com" &&
+          user.email !== "gplanet71@gmail.com"
+        ) {
+          console.log("🚫 Withdrawals are temporarily suspended.");
+          return rejectRequest("Withdrawals are temporarily suspended.");
+        }
+      }
+    } else {
+      // 사용자 정책확인 : 기본 사항 체크
       if (
         !settings.wallet_operation || settings.wallet_operation.length !== 42
       ) {
