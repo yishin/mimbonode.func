@@ -200,7 +200,12 @@ serve(async (req) => {
           console.log("Duplicate trx request detected");
 
           // 사용자 차단
-          await blockUser(user.id, "Duplicate request");
+          // await blockUser(user.id, "Duplicate request");
+
+          // 텔레그램 메시지 보내기
+          sendBlockMessage(
+            `🚫 Duplicate request: ${profile.username}`,
+          );
 
           try {
             await supabase.from("debug_logs").insert({
