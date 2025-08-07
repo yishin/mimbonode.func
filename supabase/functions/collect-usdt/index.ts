@@ -133,7 +133,7 @@ serve(async (req) => {
 
           return new Response(
             JSON.stringify({
-              error: "Rate limit exceeded.",
+              error: "Too Many Requests",
             }),
             { status: 429, headers },
           );

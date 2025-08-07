@@ -43,9 +43,8 @@ serve(async (req) => {
 
   //
   const { user, profile, wallet, settings } = authResult;
-  console.log(
-    `🚀 user_id: ${profile.username} (${user.id}) ${ip}`,
-  );
+  const username = profile.username || "";
+  console.log(`[${username}] 🚀 Harvest started - IP: ${ip}`);
 
   // 시작 로그 기록
   try {
@@ -61,7 +60,7 @@ serve(async (req) => {
   ////////////////////////////////
   // Block 체크
   if (profile?.is_block) {
-    console.log("🚫 Blocked user");
+    console.log(`[${username}] 🚫 Blocked user`);
 
     try {
       await supabase.from("debug_logs").insert({
@@ -108,7 +107,8 @@ serve(async (req) => {
 
     // 요청 사용자 검증
     if (user.id !== user_id) {
-      console.error("User ID mismatch");
+      console.error(`[${username}] User ID mismatch`);
+
       return new Response(
         JSON.stringify({ error: "User ID mismatch" }),
         { status: 401, headers },
@@ -166,7 +166,7 @@ serve(async (req) => {
         if (harvestError) {
           // 유니크 제약 위반 (23505)인 경우 = 1시간 이내 중복 요청
           if (harvestError.code === "23505") {
-            console.log("❕ Duplicate harvest request detected");
+            console.log(`[${username}] ❕ Duplicate harvest request detected`);
 
             try {
               await supabase.from("debug_logs").insert({
@@ -180,23 +180,25 @@ serve(async (req) => {
 
             return new Response(
               JSON.stringify({
-                error: "Rate limit exceeded.",
+                error: "Too Many Requests",
               }),
               { status: 429, headers },
             );
           }
 
           // 다른 에러인 경우
-          console.error("Error creating harvest record:", harvestError);
+          console.error(
+            `[${username}] Error creating harvest record:`,
+            harvestError,
+          );
           return new Response(
             JSON.stringify({ error: "Failed to process harvest request" }),
             { status: 500, headers },
           );
         }
-        console.log("Harvest request created:", harvestRequest.id);
       }
     } catch (dbError) {
-      console.error("Database error:", dbError);
+      console.error(`[${username}] Database error:`, dbError);
       return new Response(
         JSON.stringify({ error: "Internal server error" }),
         { status: 500, headers },
@@ -212,7 +214,10 @@ serve(async (req) => {
       .order("sid", { ascending: true });
 
     if (myPackagesError || !myPackages || myPackages.length === 0) {
-      console.error("Error fetching my packages:", myPackagesError);
+      console.error(
+        `[${username}] Error fetching my packages:`,
+        myPackagesError,
+      );
       return new Response(
         JSON.stringify({ error: "Internal server error" }),
         { status: 500, headers },
@@ -231,7 +236,11 @@ serve(async (req) => {
     // 2025년 3월 18일 이전이면 에러 처리
     const minDate = new Date("2025-03-18");
     if (lastHarvestTime < minDate) {
-      console.error("Invalid harvest time", lastHarvestTime, minDate);
+      console.error(
+        `[${username}] Invalid harvest time`,
+        lastHarvestTime,
+        minDate,
+      );
       return new Response(
         JSON.stringify({ error: "Invalid harvest time" }),
         { status: 400, headers },
@@ -241,13 +250,8 @@ serve(async (req) => {
     const timeDiff = currentTime.getTime() - lastHarvestTime.getTime();
     const secondsDiff = Math.floor(timeDiff / 1000);
 
-    console.log(
-      "Server Seconds: " + secondsDiff,
-      "Client Seconds: " + elapsedSeconds,
-    );
-
     if (secondsDiff < settings.mining_cooltime) {
-      console.error("Mining cooltime error");
+      console.error(`[${username}] Mining cooltime error`);
       return new Response(
         JSON.stringify({ error: "Mining cooltime error" }),
         { status: 200, headers },
@@ -293,9 +297,9 @@ serve(async (req) => {
           0,
           (currentTime.getTime() - nodeCreatedTime) / 1000,
         );
-        console.log(
-          `Package ${pkg.name}: new node, mining from purchase date, elapsed=${effectiveElapsedSeconds}s`,
-        );
+        // console.log(
+        //   `Package ${pkg.name}: new node, mining from purchase date, elapsed=${effectiveElapsedSeconds}s`,
+        // );
       } else {
         // 마지막 수확 이전에 구매한 노드: 마지막 수확 시간부터의 시간
         effectiveElapsedSeconds = secondsDiff;
@@ -304,10 +308,13 @@ serve(async (req) => {
       // 시간 기반 채굴량 계산 (채굴파워 * 시간)
       const potentialMining = packageMiningPower * effectiveElapsedSeconds;
       const remainingCapacity = maxOut - currentMined;
-      
+
       // 실제 채굴 가능량 (maxOut 제한 적용)
-      const actualPotentialMining = Math.min(potentialMining, remainingCapacity);
-      
+      const actualPotentialMining = Math.min(
+        potentialMining,
+        remainingCapacity,
+      );
+
       nodesPotentialMining.push({
         ...pkg,
         packageMiningPower,
@@ -324,8 +331,6 @@ serve(async (req) => {
         totalPotentialMining += actualPotentialMining;
       }
     }
-
-    console.log(`Total potential mining from all nodes: ${totalPotentialMining}`);
 
     // 2단계: 계산된 총 채굴량을 순차적으로 배분
     let remainingMiningAmount = totalPotentialMining;
@@ -346,9 +351,12 @@ serve(async (req) => {
 
       // 이 노드에 할당할 수 있는 최대 채굴량
       const remainingCapacity = nodePotential.remainingCapacity;
-      
+
       // 실제 할당할 채굴량 (남은 전체 채굴량과 노드 용량 중 작은 값)
-      const allocatedMining = Math.min(remainingMiningAmount, remainingCapacity);
+      const allocatedMining = Math.min(
+        remainingMiningAmount,
+        remainingCapacity,
+      );
 
       if (allocatedMining > 0) {
         // 채굴량 할당
@@ -368,9 +376,9 @@ serve(async (req) => {
         totalMined += allocatedMining;
         remainingMiningAmount -= allocatedMining;
 
-        console.log(
-          `Package ${nodePotential.name}: allocated=${allocatedMining}, remaining pool=${remainingMiningAmount}`,
-        );
+        // console.log(
+        //   `Package ${nodePotential.name}: allocated=${allocatedMining}, remaining pool=${remainingMiningAmount}`,
+        // );
       }
     }
 
@@ -381,8 +389,10 @@ serve(async (req) => {
       }
 
       // 이미 채굴량이 할당된 패키지 찾기
-      const minedPkg = packagesWithMining.find(p => p.id === nodePotential.id);
-      
+      const minedPkg = packagesWithMining.find((p) =>
+        p.id === nodePotential.id
+      );
+
       // 현재 노드의 남은 용량 계산
       let currentRemainingCapacity = 0;
       if (minedPkg) {
@@ -427,15 +437,15 @@ serve(async (req) => {
           totalCalculatedMining += bonusMined;
           totalMined += bonusMined;
 
-          console.log(
-            `Package ${nodePotential.name}: bonus applied=${bonusMined}, remaining bonus=${remainingMatchingBonus}`,
-          );
+          // console.log(
+          //   `Package ${nodePotential.name}: bonus applied=${bonusMined}, remaining bonus=${remainingMatchingBonus}`,
+          // );
         }
       }
     }
 
     if (totalCalculatedMining <= 0) {
-      console.error("No mining amount calculated");
+      console.error(`[${username}] No mining amount calculated`);
       return new Response(
         JSON.stringify({ error: "No mining amount calculated" }),
         { status: 200, headers },
@@ -443,10 +453,10 @@ serve(async (req) => {
     }
 
     // * 정책 : 남은 매칭보너스는 지금하지 않고 버림.
-    console.log("remainingMatchingBonus:" + remainingMatchingBonus);
-    console.log("totalMined:" + totalMined);
-    console.log("totalBonusUsed:" + totalBonusUsed);
-    console.log("totalRegularMined:" + totalRegularMined);
+    // console.log("remainingMatchingBonus:" + remainingMatchingBonus);
+    // console.log("totalMined:" + totalMined);
+    // console.log("totalBonusUsed:" + totalBonusUsed);
+    // console.log("totalRegularMined:" + totalRegularMined);
 
     ////////////////////////////////////////////////////////////////
     // 토큰 전송 처리
@@ -454,7 +464,7 @@ serve(async (req) => {
 
     // 수수료가 총 채굴량보다 큰 경우 체크
     if (totalMined < feeAmount) {
-      console.error("Total mined amount is less than fee amount");
+      console.error(`[${username}] Total mined amount is less than fee amount`);
       return new Response(
         JSON.stringify({
           error: "Insufficient mining amount",
@@ -479,7 +489,6 @@ serve(async (req) => {
     try {
       // 수수료 전송 먼저 (작은 금액부터 안전하게)
       if (feeAmount > 0) {
-        console.log("Sending fee first:", feeAmount);
         const feeResult = await sendMgg(
           settings.wallet_reward,
           settings.wallet_fee,
@@ -488,7 +497,7 @@ serve(async (req) => {
 
         if (!feeResult || feeResult.error) {
           console.error(
-            "Error sending fee:",
+            `[${username}] Error sending fee:`,
             feeResult?.error || "No fee result",
           );
 
@@ -510,7 +519,10 @@ serve(async (req) => {
               .order("created_at", { ascending: false })
               .limit(1);
           } catch (dbError) {
-            console.error("Error updating failed harvest record:", dbError);
+            console.error(
+              `[${username}] Error updating failed harvest record:`,
+              dbError,
+            );
           }
 
           return new Response(
@@ -522,15 +534,13 @@ serve(async (req) => {
         }
 
         feeTxHash = feeResult.txHash || "";
-        console.log("Fee transfer successful:", feeTxHash);
+        // 수수료 전송 성공 로그 제거 - 불필요
 
         // 트랜잭션 간 지연 추가 (최소 1초)
         await new Promise((resolve) => setTimeout(resolve, 1000));
-        console.log("waiting 1 sec between fee and main transfer");
       }
 
       // 메인 토큰 전송
-      console.log("Sending main token:", transferAmount);
       result = await sendMgg(
         settings.wallet_reward,
         toAddress,
@@ -539,14 +549,16 @@ serve(async (req) => {
 
       if (!result || result.error) {
         console.error(
-          "Error sending main token:",
+          `[${username}] Error sending main token:`,
           result?.error || "No result",
         );
 
         // 메인 토큰 전송 실패 - 수수료는 이미 전송됨
         // 수수료 회수 시도
         if (feeAmount > 0 && feeTxHash) {
-          console.log("Main transfer failed, attempting to recover fee");
+          console.log(
+            `[${username}] Main transfer failed, attempting to recover fee`,
+          );
           try {
             const feeRecoverResult = await sendMgg(
               settings.wallet_fee,
@@ -555,7 +567,10 @@ serve(async (req) => {
             );
 
             if (!feeRecoverResult || feeRecoverResult.error) {
-              console.error("Failed to recover fee:", feeRecoverResult?.error);
+              console.error(
+                `[${username}] Failed to recover fee:`,
+                feeRecoverResult?.error,
+              );
 
               // harvest 실패 기록 업데이트 (수수료 회수 실패)
               try {
@@ -580,7 +595,10 @@ serve(async (req) => {
                   .order("created_at", { ascending: false })
                   .limit(1);
               } catch (dbError) {
-                console.error("Error updating failed harvest record:", dbError);
+                console.error(
+                  `[${username}] Error updating failed harvest record:`,
+                  dbError,
+                );
               }
 
               return new Response(
@@ -591,7 +609,10 @@ serve(async (req) => {
               );
             }
 
-            console.log("Fee recovery successful:", feeRecoverResult.txHash);
+            console.log(
+              `[${username}] Fee recovery successful:`,
+              feeRecoverResult.txHash,
+            );
 
             // harvest 실패 기록 업데이트 (수수료 회수 성공)
             try {
@@ -614,7 +635,10 @@ serve(async (req) => {
                 .order("created_at", { ascending: false })
                 .limit(1);
             } catch (dbError) {
-              console.error("Error updating failed harvest record:", dbError);
+              console.error(
+                `[${username}] Error updating failed harvest record:`,
+                dbError,
+              );
             }
 
             return new Response(
@@ -624,7 +648,10 @@ serve(async (req) => {
               { status: 500, headers },
             );
           } catch (recoverError) {
-            console.error("Exception during fee recovery:", recoverError);
+            console.error(
+              `[${username}] Exception during fee recovery:`,
+              recoverError,
+            );
 
             // harvest 실패 기록 업데이트 (수수료 회수 예외)
             try {
@@ -650,7 +677,10 @@ serve(async (req) => {
                 .order("created_at", { ascending: false })
                 .limit(1);
             } catch (dbError) {
-              console.error("Error updating failed harvest record:", dbError);
+              console.error(
+                `[${username}] Error updating failed harvest record:`,
+                dbError,
+              );
             }
 
             return new Response(
@@ -679,7 +709,10 @@ serve(async (req) => {
               .order("created_at", { ascending: false })
               .limit(1);
           } catch (dbError) {
-            console.error("Error updating failed harvest record:", dbError);
+            console.error(
+              `[${username}] Error updating failed harvest record:`,
+              dbError,
+            );
           }
 
           return new Response(
@@ -689,9 +722,7 @@ serve(async (req) => {
         }
       }
 
-      console.log("Main transfer successful:", result.txHash);
-
-      console.log("Token transfer successful, now updating packages");
+      // 토큰 전송 성공
 
       // 토큰 전송이 성공했으므로 이제 패키지 업데이트 진행
       // 원본 myPackages에 miningAmount 추가 (마이닝 기록 생성용)
@@ -704,14 +735,14 @@ serve(async (req) => {
           .eq("id", pkg.id);
 
         if (error) {
-          console.error("Error updating package:", error);
+          console.error(`[${username}] Error updating package:`, error);
           // 패키지 업데이트 실패는 로그만 남기고 계속 진행
         }
 
         // packagesWithMining에 이미 miningAmount가 있으므로 별도 추가 불필요
       }
     } catch (error) {
-      console.error("Token transfer error:", error);
+      console.error(`[${username}] Token transfer error:`, error);
 
       const errorMessage = error instanceof Error
         ? error.message
@@ -771,7 +802,10 @@ serve(async (req) => {
       .eq("user_id", profile.user_id);
 
     if (updateProfileError) {
-      console.error("Update profile error:", updateProfileError.message);
+      console.error(
+        `[${username}] Update profile error:`,
+        updateProfileError.message,
+      );
     }
 
     ////////////////////////////////////////////////////////////////
@@ -803,7 +837,10 @@ serve(async (req) => {
         });
 
       if (miningTxError) {
-        console.error("Mining transaction error:", miningTxError.message);
+        console.error(
+          `[${username}] Mining transaction error:`,
+          miningTxError.message,
+        );
       }
     }
 
@@ -825,7 +862,7 @@ serve(async (req) => {
 
       if (miningTxError) {
         console.error(
-          "Matching bonus transaction error:",
+          `[${username}] Matching bonus transaction error:`,
           miningTxError.message,
         );
       }
@@ -833,8 +870,8 @@ serve(async (req) => {
       // 사용된 매칭 보너스는 이미 totalMined에 포함되어 있음
     }
 
-    console.log("transferred_amount:" + profit);
-    console.log("mining_total_amount:" + totalMined);
+    // console.log("transferred_amount:" + profit);
+    // console.log("mining_total_amount:" + totalMined);
 
     // Harvest 시작시의 매칭 보너스 처리
     if (matchingBonus > 0) {
@@ -848,7 +885,7 @@ serve(async (req) => {
 
       if (updateMatchingBonusError) {
         console.error(
-          "Update matching bonus error:",
+          `[${username}] Update matching bonus error:`,
           updateMatchingBonusError.message,
         );
       }
@@ -885,7 +922,7 @@ serve(async (req) => {
       matchingBonusRate = [0, 0, 0, 0, 0, 35];
     }
 
-    console.log("Starting upline matching bonus processing");
+    // 업라인 매칭보너스 처리 시작
 
     while (uplineCode && levelCount < 6) {
       // 상위 후원자 조회
@@ -896,30 +933,18 @@ serve(async (req) => {
         .single();
 
       if (uplineError) {
-        console.error("Error fetching upline:", uplineError);
+        console.error(`[${username}] Error fetching upline:`, uplineError);
         break;
       }
 
-      console.log(
-        `Processing upline level ${
-          levelCount + 1
-        }, user: ${uplineUser.username}, level: ${uplineUser.user_level}`,
-      );
-
       // 수정된 조건: levelCount보다 uplineUser.user_level이 높거나 같은 경우에만 보너스 지급
       if (uplineUser.user_level <= levelCount) {
-        console.log(
-          `Skipping upline ${uplineUser.username} - user level (${uplineUser.user_level}) not higher than current level count (${levelCount})`,
-        );
         uplineCode = uplineUser.upline_code;
         continue;
       }
 
       // A. 업라인의 매칭 등급이 하위 업라인의 매칭 등급보다 높아야 함
       if (levelCount > 0 && uplineUser.user_level <= profile.user_level) {
-        console.log(
-          `Skipping upline ${uplineUser.username} - level not higher than downline`,
-        );
         uplineCode = uplineUser.upline_code;
         levelCount++;
         continue;
@@ -953,7 +978,9 @@ serve(async (req) => {
         const bonus = (profit * currentLevelBonusRate) / 100;
 
         console.log(
-          `Applying bonus to ${uplineUser.username}: ${currentLevelBonusRate}% = ${bonus} (total applied: ${totalAppliedRate}%)`,
+          `[${username}] upline bonus to ${uplineUser.username}: ${currentLevelBonusRate}% = ${bonus.toLocaleString()} (level: ${
+            levelCount + 1
+          })`,
         );
 
         // 매칭 보너스 지급
@@ -970,12 +997,11 @@ serve(async (req) => {
         );
 
         if (error) {
-          console.error("Error incrementing matching bonus:", error);
-        } else {
-          console.log(
-            `Successfully applied matching bonus to ${uplineUser.username}`,
+          console.error(
+            `[${username}] Error incrementing matching bonus:`,
+            error,
           );
-
+        } else {
           // 매칭 보너스 지급 기록 생성
           const { data: bonusTx, error: bonusTxError } = await supabase
             .from("commissions")
@@ -992,20 +1018,16 @@ serve(async (req) => {
 
           if (bonusTxError) {
             console.error(
-              "Error recording matching bonus history:",
+              `[${username}] Error recording matching bonus history:`,
               bonusTxError,
             );
           }
         }
       } else {
-        console.log(
-          `No bonus applied to ${uplineUser.username} - all rates already used or 35% limit reached`,
-        );
       }
 
       // 35% 제한에 도달하면 중단
       if (totalAppliedRate >= 35) {
-        console.log("Reached 35% total bonus rate limit, stopping");
         break;
       }
 
@@ -1014,9 +1036,9 @@ serve(async (req) => {
       levelCount++;
     }
 
-    console.log(
-      `Matching bonus processing completed. Total applied rate: ${totalAppliedRate}%`,
-    );
+    // console.log(
+    //   `Matching bonus processing completed. Total applied rate: ${totalAppliedRate}%`,
+    // );
 
     // 종료 로그 기록
     try {
@@ -1078,14 +1100,20 @@ serve(async (req) => {
         .limit(1);
 
       if (updateError) {
-        console.error("Error updating harvest record:", updateError);
+        console.error(
+          `[${username}] Error updating harvest record:`,
+          updateError,
+        );
       }
     } catch (dbError) {
-      console.error("Database error while updating harvest:", dbError);
+      console.error(
+        `[${username}] Database error while updating harvest:`,
+        dbError,
+      );
     }
 
     // 성공 응답
-    console.log(`✅ Harvest successful: ${profile.username} (${user.id})`);
+    console.log(`[${username}] ✅ Harvest completed - Amount: ${profit} MGG`);
     return new Response(
       JSON.stringify({
         success: true,
@@ -1097,7 +1125,10 @@ serve(async (req) => {
       { status: 200, headers },
     );
   } catch (error) {
-    console.error("🛑 Unexpected error:", error);
+    console.error(
+      `[${profile?.username || "unknown"}] 🛑 Unexpected error:`,
+      error,
+    );
 
     const errorMessage = error instanceof Error
       ? error.message
@@ -1122,7 +1153,12 @@ serve(async (req) => {
         .order("created_at", { ascending: false })
         .limit(1);
     } catch (dbError) {
-      console.error("Error updating failed harvest record:", dbError);
+      console.error(
+        `[${
+          profile?.username || "unknown"
+        }] Error updating failed harvest record:`,
+        dbError,
+      );
     }
 
     return new Response(
