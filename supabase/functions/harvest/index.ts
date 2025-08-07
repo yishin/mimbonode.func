@@ -489,6 +489,7 @@ serve(async (req) => {
     try {
       // 수수료 전송 먼저 (작은 금액부터 안전하게)
       if (feeAmount > 0) {
+        console.log(`[${username}] Sending harvest fee: ${feeAmount} MGG`);
         const feeResult = await sendMgg(
           settings.wallet_reward,
           settings.wallet_fee,
@@ -541,6 +542,7 @@ serve(async (req) => {
       }
 
       // 메인 토큰 전송
+      console.log(`[${username}] Sending harvest reward: ${transferAmount} MGG to ${toAddress}`);
       result = await sendMgg(
         settings.wallet_reward,
         toAddress,
