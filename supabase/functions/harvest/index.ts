@@ -231,7 +231,7 @@ serve(async (req) => {
     // 2025년 3월 18일 이전이면 에러 처리
     const minDate = new Date("2025-03-18");
     if (lastHarvestTime < minDate) {
-      console.error("Invalid harvest time");
+      console.error("Invalid harvest time", lastHarvestTime, minDate);
       return new Response(
         JSON.stringify({ error: "Invalid harvest time" }),
         { status: 400, headers },
@@ -262,144 +262,208 @@ serve(async (req) => {
     let totalMined = 0; // 총 채굴량
     let remainMatchingBonus = profile.matching_bonus; // 남은 매칭보너스
 
-    const totalMiningPower = myPackages.reduce((sum, pkg) => {
-      // 이미 채굴된 노드는 채굴력 더하지 않음
-      if (pkg.total_mined < pkg.max_out) {
-        return sum + parseFloat(pkg.mining_power);
+    const feeAmount = parseFloat(settings.harvest_fee || 0);
+
+    // 채굴 계산 준비
+    const packagesWithMining = [];
+    let totalCalculatedMining = 0; // 전체 계산된 채굴량
+    let totalRegularMined = 0; // 시간 기반 채굴량
+    let totalBonusUsed = 0; // 사용된 매칭보너스
+    let remainingMatchingBonus = remainMatchingBonus;
+
+    // 현재 시간
+    const harvestTime = lastHarvestTime.getTime();
+
+    // 1단계: 각 노드의 채굴 가능량을 병렬로 계산 (클라이언트와 동일)
+    const nodesPotentialMining = [];
+    let totalPotentialMining = 0;
+
+    for (const pkg of myPackages) {
+      const packageMiningPower = parseFloat(pkg.mining_power || 0);
+      const currentMined = parseFloat(pkg.total_mined || 0);
+      const maxOut = parseFloat(pkg.max_out || 0);
+
+      // 노드의 채굴 시간 계산
+      const nodeCreatedTime = new Date(pkg.created_at).getTime();
+      let effectiveElapsedSeconds = 0;
+
+      if (nodeCreatedTime > harvestTime) {
+        // 마지막 수확 이후에 구매한 노드: 구매일로부터의 시간
+        effectiveElapsedSeconds = Math.max(
+          0,
+          (currentTime.getTime() - nodeCreatedTime) / 1000,
+        );
+        console.log(
+          `Package ${pkg.name}: new node, mining from purchase date, elapsed=${effectiveElapsedSeconds}s`,
+        );
+      } else {
+        // 마지막 수확 이전에 구매한 노드: 마지막 수확 시간부터의 시간
+        effectiveElapsedSeconds = secondsDiff;
       }
 
-      return sum;
-    }, 0); // 총 채굴력
+      // 시간 기반 채굴량 계산 (채굴파워 * 시간)
+      const potentialMining = packageMiningPower * effectiveElapsedSeconds;
+      const remainingCapacity = maxOut - currentMined;
+      
+      // 실제 채굴 가능량 (maxOut 제한 적용)
+      const actualPotentialMining = Math.min(potentialMining, remainingCapacity);
+      
+      nodesPotentialMining.push({
+        ...pkg,
+        packageMiningPower,
+        currentMined,
+        maxOut,
+        effectiveElapsedSeconds,
+        potentialMining,
+        actualPotentialMining,
+        remainingCapacity: remainingCapacity,
+      });
 
-    const feeAmount = parseFloat(settings.harvest_fee || 0);
-    let toMiningAmount = totalMiningPower * secondsDiff + remainMatchingBonus; // 총 채굴할 량 = 총 채굴력 * 채굴 시간 + 남은 매칭보너스
+      // 활성 노드만 총 채굴량에 포함 (maxOut까지만)
+      if (currentMined < maxOut && packageMiningPower > 0) {
+        totalPotentialMining += actualPotentialMining;
+      }
+    }
 
-    if (toMiningAmount <= 0) {
-      console.error("Mining amount error");
+    console.log(`Total potential mining from all nodes: ${totalPotentialMining}`);
+
+    // 2단계: 계산된 총 채굴량을 순차적으로 배분
+    let remainingMiningAmount = totalPotentialMining;
+
+    for (const nodePotential of nodesPotentialMining) {
+      if (remainingMiningAmount <= 0) {
+        break;
+      }
+
+      const currentMined = nodePotential.currentMined;
+      const maxOut = nodePotential.maxOut;
+      const packageMiningPower = nodePotential.packageMiningPower;
+
+      // 이미 max_out에 도달하거나 mining_power가 0인 패키지는 건너뛰기
+      if (currentMined >= maxOut || packageMiningPower <= 0) {
+        continue;
+      }
+
+      // 이 노드에 할당할 수 있는 최대 채굴량
+      const remainingCapacity = nodePotential.remainingCapacity;
+      
+      // 실제 할당할 채굴량 (남은 전체 채굴량과 노드 용량 중 작은 값)
+      const allocatedMining = Math.min(remainingMiningAmount, remainingCapacity);
+
+      if (allocatedMining > 0) {
+        // 채굴량 할당
+        const updatedPkg = {
+          ...nodePotential,
+          newTotalMined: currentMined + allocatedMining,
+          bonusMined: 0,
+          regularMined: allocatedMining,
+          miningAmount: allocatedMining,
+          timeUsed: nodePotential.effectiveElapsedSeconds,
+          remainingCapacity: remainingCapacity - allocatedMining,
+        };
+
+        packagesWithMining.push(updatedPkg);
+        totalCalculatedMining += allocatedMining;
+        totalRegularMined += allocatedMining;
+        totalMined += allocatedMining;
+        remainingMiningAmount -= allocatedMining;
+
+        console.log(
+          `Package ${nodePotential.name}: allocated=${allocatedMining}, remaining pool=${remainingMiningAmount}`,
+        );
+      }
+    }
+
+    // 3단계: 매칭보너스를 순차적으로 적용 (모든 노드에 구매순서대로)
+    for (const nodePotential of nodesPotentialMining) {
+      if (remainingMatchingBonus <= 0) {
+        break; // 매칭보너스가 모두 소진되면 중단
+      }
+
+      // 이미 채굴량이 할당된 패키지 찾기
+      const minedPkg = packagesWithMining.find(p => p.id === nodePotential.id);
+      
+      // 현재 노드의 남은 용량 계산
+      let currentRemainingCapacity = 0;
+      if (minedPkg) {
+        currentRemainingCapacity = minedPkg.remainingCapacity;
+      } else {
+        // 채굴량이 할당되지 않은 노드의 경우 원래 남은 용량 사용
+        const currentMined = nodePotential.currentMined;
+        const maxOut = nodePotential.maxOut;
+        currentRemainingCapacity = maxOut - currentMined;
+      }
+
+      // 남은 용량이 있는 노드에만 보너스 적용
+      if (currentRemainingCapacity > 0) {
+        const bonusMined = Math.min(
+          remainingMatchingBonus,
+          currentRemainingCapacity,
+        );
+
+        if (bonusMined > 0) {
+          if (minedPkg) {
+            // 이미 채굴량이 할당된 노드: 기존 데이터 업데이트
+            minedPkg.newTotalMined += bonusMined;
+            minedPkg.bonusMined = bonusMined;
+            minedPkg.miningAmount += bonusMined;
+            minedPkg.remainingCapacity -= bonusMined;
+          } else {
+            // 채굴량이 할당되지 않은 노드: 새로 추가
+            const newPkg = {
+              ...nodePotential,
+              newTotalMined: nodePotential.currentMined + bonusMined,
+              bonusMined: bonusMined,
+              regularMined: 0,
+              miningAmount: bonusMined,
+              timeUsed: nodePotential.effectiveElapsedSeconds,
+              remainingCapacity: currentRemainingCapacity - bonusMined,
+            };
+            packagesWithMining.push(newPkg);
+          }
+
+          remainingMatchingBonus -= bonusMined;
+          totalBonusUsed += bonusMined;
+          totalCalculatedMining += bonusMined;
+          totalMined += bonusMined;
+
+          console.log(
+            `Package ${nodePotential.name}: bonus applied=${bonusMined}, remaining bonus=${remainingMatchingBonus}`,
+          );
+        }
+      }
+    }
+
+    if (totalCalculatedMining <= 0) {
+      console.error("No mining amount calculated");
       return new Response(
-        JSON.stringify({ error: "Mining amount error" }),
+        JSON.stringify({ error: "No mining amount calculated" }),
         { status: 200, headers },
       );
     }
 
-    // 1. 토큰 전송 전에 노드별 채굴 (우선 마이닝만)
-    toMiningAmount = totalMiningPower * secondsDiff;
-    for (const pkg of myPackages) {
-      if (pkg.total_mined >= pkg.max_out) {
-        continue;
-      }
-
-      // 패키지의 남은 최대 채굴량 계산
-      let remainPkgMiningAmount = pkg.max_out - pkg.total_mined;
-
-      // 패키지 남은 채굴량이 총 채굴할 량보다 작으면 => 패키지 남은 채굴량만큼 채굴하고 다음 패키지 채굴
-      let miningAmount = Math.min(remainPkgMiningAmount, toMiningAmount);
-      pkg.total_mined += miningAmount;
-      if (pkg.total_mined === pkg.max_out) {
-        // 패키지 완전 채굴 처리
-        const { data, error } = await supabase
-          .from("mypackages")
-          .update({
-            total_mined: pkg.total_mined,
-            // status: "completed", // 사용자가 채굴 완료 처리
-          })
-          .eq("id", pkg.id);
-
-        if (error) {
-          console.error("Error updating package:", error);
-        }
-
-        // 총 채굴할 량에서 패키지 채굴량 차감
-        pkg.miningAmount = miningAmount;
-        toMiningAmount -= miningAmount;
-        totalMined += miningAmount;
-      } else {
-        //
-        const { data, error } = await supabase
-          .from("mypackages")
-          .update({
-            total_mined: pkg.total_mined,
-          })
-          .eq("id", pkg.id);
-
-        if (error) {
-          console.error("Error updating package:", error);
-        }
-
-        // 총 채굴할 량에서 패키지 채굴량 차감
-        pkg.miningAmount = miningAmount;
-        toMiningAmount -= miningAmount;
-        totalMined += miningAmount;
-        break;
-      }
-
-      if (toMiningAmount <= 0) {
-        break;
-      }
-    }
-
-    // 2. 토큰 전송 전에 노드별 채굴 (매칭보너스만)
-    toMiningAmount = remainMatchingBonus;
-    for (const pkg of myPackages) {
-      if (pkg.total_mined >= pkg.max_out) {
-        continue;
-      }
-
-      // 패키지의 남은 최대 채굴량 계산
-      let remainPkgMiningAmount = pkg.max_out - pkg.total_mined;
-
-      // 패키지 남은 채굴량이 총 채굴할 량보다 작으면 => 패키지 남은 채굴량만큼 채굴하고 다음 패키지 채굴
-      let miningAmount = Math.min(remainPkgMiningAmount, toMiningAmount);
-      pkg.total_mined += miningAmount;
-      if (pkg.total_mined === pkg.max_out) {
-        // 패키지 완전 채굴 처리
-        const { data, error } = await supabase
-          .from("mypackages")
-          .update({
-            total_mined: pkg.total_mined,
-            // status: "completed", // 사용자가 채굴 완료 처리
-          })
-          .eq("id", pkg.id);
-
-        if (error) {
-          console.error("Error updating package:", error);
-        }
-
-        // 총 채굴할 량에서 패키지 채굴량 차감
-        toMiningAmount -= miningAmount;
-        totalMined += miningAmount;
-      } else {
-        //
-        const { data, error } = await supabase
-          .from("mypackages")
-          .update({
-            total_mined: pkg.total_mined,
-          })
-          .eq("id", pkg.id);
-
-        if (error) {
-          console.error("Error updating package:", error);
-        }
-
-        // 총 채굴할 량에서 패키지 채굴량 차감
-        // pkg.miningAmount = miningAmount; // 패키지별 마이닝 기록에 Matching Bonus 기록 안함
-        toMiningAmount -= miningAmount;
-        totalMined += miningAmount;
-        break;
-      }
-
-      if (toMiningAmount <= 0) {
-        break;
-      }
-    }
-
     // * 정책 : 남은 매칭보너스는 지금하지 않고 버림.
-    console.log("remainMiningAmount:" + toMiningAmount);
+    console.log("remainingMatchingBonus:" + remainingMatchingBonus);
     console.log("totalMined:" + totalMined);
+    console.log("totalBonusUsed:" + totalBonusUsed);
+    console.log("totalRegularMined:" + totalRegularMined);
 
     ////////////////////////////////////////////////////////////////
     // 토큰 전송 처리
     ////////////////////////////////////////////////////////////////
+
+    // 수수료가 총 채굴량보다 큰 경우 체크
+    if (totalMined < feeAmount) {
+      console.error("Total mined amount is less than fee amount");
+      return new Response(
+        JSON.stringify({
+          error: "Insufficient mining amount",
+          totalMined: totalMined,
+          feeAmount: feeAmount,
+        }),
+        { status: 400, headers },
+      );
+    }
 
     // 총 전송할 토큰(Matching Bonus 제외) 계산
     const transferAmount = totalMined - feeAmount;
@@ -408,41 +472,278 @@ serve(async (req) => {
     const toAddress = wallet.address;
 
     setOperationWallet(settings.wallet_operation); // 수수료를 지불할 지갑 설정
-    const result = await sendMgg(
-      settings.wallet_reward,
-      toAddress,
-      transferAmount.toString(),
-    ); // 마이닝한 만큼 MGG 토큰 전송
 
-    if (result.error) {
-      console.error("Error sending MGG:", result.error);
-      return new Response(
-        JSON.stringify({ error: result.error || "Internal server error" }),
-        { status: 200, headers },
-      );
-    }
-
-    // 트랜잭션 간 지연 추가 (최소 1초)
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    console.log("waiting 1 sec");
-
-    // 수수료 전송
+    let result;
     let feeTxHash = "";
-    if (feeAmount > 0) {
-      const feeResult = await sendMgg(
-        settings.wallet_reward,
-        settings.wallet_fee,
-        feeAmount.toString(),
-      );
-      if (feeResult.error) {
-        console.error("Error sending MGG 2:", result.error);
-        return new Response(
-          JSON.stringify({ error: result.error || "Internal server error" }),
-          { status: 200, headers },
+
+    try {
+      // 수수료 전송 먼저 (작은 금액부터 안전하게)
+      if (feeAmount > 0) {
+        console.log("Sending fee first:", feeAmount);
+        const feeResult = await sendMgg(
+          settings.wallet_reward,
+          settings.wallet_fee,
+          feeAmount.toString(),
         );
+
+        if (!feeResult || feeResult.error) {
+          console.error(
+            "Error sending fee:",
+            feeResult?.error || "No fee result",
+          );
+
+          // 수수료 전송 실패 시 전체 실패 처리
+          try {
+            await supabase
+              .from("harvests")
+              .update({
+                status: "FAILED",
+                data: {
+                  error_message: feeResult?.error || "Fee transfer failed",
+                  error_type: "FEE_TRANSFER_FAILED",
+                  error_time: new Date().toISOString(),
+                },
+                processed_at: new Date().toISOString(),
+              })
+              .eq("user_id", user.id)
+              .eq("status", "HARVESTING")
+              .order("created_at", { ascending: false })
+              .limit(1);
+          } catch (dbError) {
+            console.error("Error updating failed harvest record:", dbError);
+          }
+
+          return new Response(
+            JSON.stringify({
+              error: feeResult?.error || "Fee transfer failed",
+            }),
+            { status: 500, headers },
+          );
+        }
+
+        feeTxHash = feeResult.txHash || "";
+        console.log("Fee transfer successful:", feeTxHash);
+
+        // 트랜잭션 간 지연 추가 (최소 1초)
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        console.log("waiting 1 sec between fee and main transfer");
       }
 
-      feeTxHash = feeResult.txHash;
+      // 메인 토큰 전송
+      console.log("Sending main token:", transferAmount);
+      result = await sendMgg(
+        settings.wallet_reward,
+        toAddress,
+        transferAmount.toString(),
+      );
+
+      if (!result || result.error) {
+        console.error(
+          "Error sending main token:",
+          result?.error || "No result",
+        );
+
+        // 메인 토큰 전송 실패 - 수수료는 이미 전송됨
+        // 수수료 회수 시도
+        if (feeAmount > 0 && feeTxHash) {
+          console.log("Main transfer failed, attempting to recover fee");
+          try {
+            const feeRecoverResult = await sendMgg(
+              settings.wallet_fee,
+              settings.wallet_reward,
+              feeAmount.toString(),
+            );
+
+            if (!feeRecoverResult || feeRecoverResult.error) {
+              console.error("Failed to recover fee:", feeRecoverResult?.error);
+
+              // harvest 실패 기록 업데이트 (수수료 회수 실패)
+              try {
+                await supabase
+                  .from("harvests")
+                  .update({
+                    status: "FAILED",
+                    data: {
+                      error_message:
+                        "Main transfer failed, fee recovery failed",
+                      error_type: "MAIN_TRANSFER_FAILED_FEE_RECOVERY_FAILED",
+                      main_error: result?.error || "Main transfer failed",
+                      fee_tx_hash: feeTxHash,
+                      fee_recovery_error: feeRecoverResult?.error ||
+                        "No recovery result",
+                      error_time: new Date().toISOString(),
+                    },
+                    processed_at: new Date().toISOString(),
+                  })
+                  .eq("user_id", user.id)
+                  .eq("status", "HARVESTING")
+                  .order("created_at", { ascending: false })
+                  .limit(1);
+              } catch (dbError) {
+                console.error("Error updating failed harvest record:", dbError);
+              }
+
+              return new Response(
+                JSON.stringify({
+                  error: "Critical system error: Please contact administrator",
+                }),
+                { status: 500, headers },
+              );
+            }
+
+            console.log("Fee recovery successful:", feeRecoverResult.txHash);
+
+            // harvest 실패 기록 업데이트 (수수료 회수 성공)
+            try {
+              await supabase
+                .from("harvests")
+                .update({
+                  status: "FAILED",
+                  data: {
+                    error_message: "Main transfer failed, fee recovered",
+                    error_type: "MAIN_TRANSFER_FAILED_FEE_RECOVERED",
+                    main_error: result?.error || "Main transfer failed",
+                    fee_tx_hash: feeTxHash,
+                    fee_recovery_tx_hash: feeRecoverResult.txHash,
+                    error_time: new Date().toISOString(),
+                  },
+                  processed_at: new Date().toISOString(),
+                })
+                .eq("user_id", user.id)
+                .eq("status", "HARVESTING")
+                .order("created_at", { ascending: false })
+                .limit(1);
+            } catch (dbError) {
+              console.error("Error updating failed harvest record:", dbError);
+            }
+
+            return new Response(
+              JSON.stringify({
+                error: "Main transfer failed. Fee has been recovered.",
+              }),
+              { status: 500, headers },
+            );
+          } catch (recoverError) {
+            console.error("Exception during fee recovery:", recoverError);
+
+            // harvest 실패 기록 업데이트 (수수료 회수 예외)
+            try {
+              await supabase
+                .from("harvests")
+                .update({
+                  status: "FAILED",
+                  data: {
+                    error_message:
+                      "Main transfer failed, fee recovery exception",
+                    error_type: "MAIN_TRANSFER_FAILED_FEE_RECOVERY_EXCEPTION",
+                    main_error: result?.error || "Main transfer failed",
+                    fee_tx_hash: feeTxHash,
+                    recovery_exception: recoverError instanceof Error
+                      ? recoverError.message
+                      : "Unknown recovery error",
+                    error_time: new Date().toISOString(),
+                  },
+                  processed_at: new Date().toISOString(),
+                })
+                .eq("user_id", user.id)
+                .eq("status", "HARVESTING")
+                .order("created_at", { ascending: false })
+                .limit(1);
+            } catch (dbError) {
+              console.error("Error updating failed harvest record:", dbError);
+            }
+
+            return new Response(
+              JSON.stringify({
+                error: "Critical system error: Please contact administrator",
+              }),
+              { status: 500, headers },
+            );
+          }
+        } else {
+          // 수수료가 없었던 경우 단순 실패 처리
+          try {
+            await supabase
+              .from("harvests")
+              .update({
+                status: "FAILED",
+                data: {
+                  error_message: result?.error || "Main transfer failed",
+                  error_type: "MAIN_TRANSFER_FAILED",
+                  error_time: new Date().toISOString(),
+                },
+                processed_at: new Date().toISOString(),
+              })
+              .eq("user_id", user.id)
+              .eq("status", "HARVESTING")
+              .order("created_at", { ascending: false })
+              .limit(1);
+          } catch (dbError) {
+            console.error("Error updating failed harvest record:", dbError);
+          }
+
+          return new Response(
+            JSON.stringify({ error: result?.error || "Main transfer failed" }),
+            { status: 500, headers },
+          );
+        }
+      }
+
+      console.log("Main transfer successful:", result.txHash);
+
+      console.log("Token transfer successful, now updating packages");
+
+      // 토큰 전송이 성공했으므로 이제 패키지 업데이트 진행
+      // 원본 myPackages에 miningAmount 추가 (마이닝 기록 생성용)
+      for (const pkg of packagesWithMining) {
+        const { data, error } = await supabase
+          .from("mypackages")
+          .update({
+            total_mined: pkg.newTotalMined,
+          })
+          .eq("id", pkg.id);
+
+        if (error) {
+          console.error("Error updating package:", error);
+          // 패키지 업데이트 실패는 로그만 남기고 계속 진행
+        }
+
+        // packagesWithMining에 이미 miningAmount가 있으므로 별도 추가 불필요
+      }
+    } catch (error) {
+      console.error("Token transfer error:", error);
+
+      const errorMessage = error instanceof Error
+        ? error.message
+        : "Token transfer exception";
+      const errorStack = error instanceof Error ? error.stack : undefined;
+
+      // harvest 실패 기록 업데이트
+      try {
+        await supabase
+          .from("harvests")
+          .update({
+            status: "FAILED",
+            data: {
+              error_message: errorMessage,
+              error_type: "TOKEN_TRANSFER_EXCEPTION",
+              error_stack: errorStack,
+              error_time: new Date().toISOString(),
+            },
+            processed_at: new Date().toISOString(),
+          })
+          .eq("user_id", user.id)
+          .eq("status", "HARVESTING")
+          .order("created_at", { ascending: false })
+          .limit(1);
+      } catch (dbError) {
+        console.error("Error updating failed harvest record:", dbError);
+      }
+
+      return new Response(
+        JSON.stringify({ error: "Token transfer failed" }),
+        { status: 500, headers },
+      );
     }
 
     // 매칭 보너스 기록 로그
@@ -478,11 +779,14 @@ serve(async (req) => {
     const profit = transferAmount;
 
     // 패키지별 마이닝 기록 생성 (토큰 전송 후)
-    for (let i = 0; i < myPackages.length; i++) {
-      const pkg = myPackages[i];
+    for (let i = 0; i < packagesWithMining.length; i++) {
+      const pkg = packagesWithMining[i];
       if (!pkg?.miningAmount || pkg.miningAmount <= 0) {
         continue;
       }
+
+      // 원본 패키지 정보 찾기
+      const originalPkg = myPackages.find((p: any) => p.id === pkg.id);
 
       // 패키지별 마이닝 기록 생성
       const { data: miningTx, error: miningTxError } = await supabase
@@ -490,7 +794,7 @@ serve(async (req) => {
         .insert({
           user_id: user.id,
           package_id: pkg.id,
-          name: pkg.name,
+          name: originalPkg?.name || pkg.name,
           amount: pkg.miningAmount,
           user_level: profile.user_level,
           tx_hash: result.txHash,
@@ -504,7 +808,7 @@ serve(async (req) => {
     }
 
     // Matching Bonus 마이닝 Tx 기록
-    const usedMatchingBonus = totalMined - (totalMiningPower * secondsDiff); // 사용된 매칭 보너스 = 총 마이닝량(마이닝량+매칭보너스) - (마이닝량)
+    const usedMatchingBonus = totalBonusUsed; // 실제 적용된 매칭보너스 사용
     if (usedMatchingBonus > 0) {
       const { data: miningTx, error: miningTxError } = await supabase
         .from("mining")
@@ -526,8 +830,7 @@ serve(async (req) => {
         );
       }
 
-      // 사용된 매칭 보너스만 더함
-      totalMined += usedMatchingBonus;
+      // 사용된 매칭 보너스는 이미 totalMined에 포함되어 있음
     }
 
     console.log("transferred_amount:" + profit);
@@ -562,7 +865,7 @@ serve(async (req) => {
     //                매칭 보너스율 = 상위 업라인의 매칭 보너스율 - 하위 업라인의 매칭 보너스율
     //                * 매칭 보너스율의 합은 35%를 넘지 않는다.
     // 매칭 보너스 계산: 업라인의 노드 채굴 수익  * 매칭 보너스율
-    let matchingBonusRate = [];
+    let matchingBonusRate: number[] = [];
     let appliedBonusRates = [0, 0, 0, 0, 0, 0]; // 각 레벨별로 이미 적용된 보너스율 추적
     let levelCount = profile.user_level;
     let uplineCode = profile.upline_code;
@@ -728,17 +1031,27 @@ serve(async (req) => {
 
     // 성공적인 harvest 결과를 테이블에 업데이트
     try {
+      // 실제 사용된 채굴력 계산 (각 노드별 채굴력의 합)
+      const actualTotalMiningPower = packagesWithMining.reduce(
+        (sum, pkg) => sum + pkg.packageMiningPower,
+        0,
+      );
+
       const harvestData = {
-        mining_power: totalMiningPower,
+        mining_power: actualTotalMiningPower,
+        calculated_mining: totalCalculatedMining,
         seconds_diff: secondsDiff,
         elapsed_seconds: elapsedSeconds,
         total_mined: totalMined,
-        packages_info: myPackages.map((pkg) => ({
+        packages_info: packagesWithMining.map((pkg) => ({
           id: pkg.id,
           name: pkg.name,
           mining_amount: pkg.miningAmount || 0,
-          total_mined: pkg.total_mined,
+          bonus_mined: pkg.bonusMined || 0,
+          regular_mined: pkg.regularMined || 0,
+          total_mined: pkg.newTotalMined,
           max_out: pkg.max_out,
+          time_used: pkg.timeUsed || 0,
         })),
         matching_bonus_processed: {
           start_amount: matchingBonus,
@@ -786,6 +1099,11 @@ serve(async (req) => {
   } catch (error) {
     console.error("🛑 Unexpected error:", error);
 
+    const errorMessage = error instanceof Error
+      ? error.message
+      : "Unknown error";
+    const errorStack = error instanceof Error ? error.stack : undefined;
+
     // 에러 발생 시 harvest 레코드 업데이트
     try {
       await supabase
@@ -793,8 +1111,8 @@ serve(async (req) => {
         .update({
           status: "FAILED",
           data: {
-            error_message: error.message || "Unknown error",
-            error_stack: error.stack,
+            error_message: errorMessage,
+            error_stack: errorStack,
             error_time: new Date().toISOString(),
           },
           processed_at: new Date().toISOString(),
