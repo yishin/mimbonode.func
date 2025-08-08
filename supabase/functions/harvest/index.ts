@@ -148,12 +148,14 @@ serve(async (req) => {
         );
       } else {
         // 1시간 이내 이전 요청이 없으면 새로운 요청 생성
+        const currentRequestGroup = Math.floor(Date.now() / 1000 / 3600);
         const { data: harvestRequest, error: harvestError } = await supabase
           .from("harvests")
           .insert({
             user_id: user.id,
             username: profile.username,
             elapsed_seconds: elapsedSeconds,
+            request_group: currentRequestGroup,  // 명시적으로 설정
             status: "HARVESTING",
             data: {
               device_info: req.headers.get("user-agent"),
