@@ -303,7 +303,7 @@ export async function sendBnb(
       value: gasFeeWei.toString(), // 가스비만 전송
       gas: feeTransferGasLimit, // 추정된 가스 한도 사용
       gasPrice,
-      nonce: await web3.eth.getTransactionCount(operationWallet),
+      nonce: await web3.eth.getTransactionCount(operationWallet, "pending"),
     };
 
     const signedTx1 = await web3.eth.accounts.signTransaction(
@@ -324,7 +324,7 @@ export async function sendBnb(
       value: amountWei,
       gas: transferGasLimit,
       gasPrice,
-      nonce: await web3.eth.getTransactionCount(fromAddress),
+      nonce: await web3.eth.getTransactionCount(fromAddress, "pending"),
     };
 
     const signedTx2 = await web3.eth.accounts.signTransaction(
