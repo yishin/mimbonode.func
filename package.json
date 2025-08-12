@@ -8,7 +8,8 @@
     "dev": "supabase functions serve --env-file=.env.local --no-verify-jwt --inspect-mode brk .",
     "dev:no-verify-jwt": "supabase functions serve --env-file=.env.local --no-verify-jwt --inspect-mode brk .",
     "deploy:development": "./deploy.sh development",
-    "deploy:production": "./deploy.sh production"
+    "deploy:production": "./deploy.sh production",
+    "clean": "rm -rf supabase/.temp && rm -rf supabase/functions/*/.temp && rm -rf supabase/functions/*/dist"
   },
   "dependencies": {
     "hdkey": "^2.1.0"

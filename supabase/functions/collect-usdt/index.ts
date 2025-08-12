@@ -3,7 +3,7 @@
  *  - 입금된 USDT는 운영지갑으로 전송하고 Wallet 테이블의 usdt_balance 필드 업데이트
  */
 
-import { serve } from "https://deno.land/std@0.131.0/http/server.ts";
+// Deno.serve is now built-in, no import needed
 import {
   getAddressBySid,
   getAddressByUsername,
@@ -25,7 +25,7 @@ import { sendTelegramMessage } from "../utils/telegramUtils.ts";
 import { verifyTurnstileToken } from "../utils/turnstileUtils.ts";
 
 // Edge Function 시작
-serve(async (req) => {
+Deno.serve(async (req) => {
   const headers = setCorsHeaders(req);
 
   // OPTIONS 요청 처리

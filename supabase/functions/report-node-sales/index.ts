@@ -1,5 +1,5 @@
 // Supabase edge function for reporting daily node sales
-import { serve } from "https://deno.land/std@0.131.0/http/server.ts";
+// Deno.serve is now built-in, no import needed
 import { supabase } from "../utils/supabaseClient.ts";
 import { setCorsHeaders } from "../utils/corsUtils.ts";
 
@@ -303,7 +303,7 @@ async function generateAndSendReport() {
 }
 
 // Edge Function 시작
-serve(async (req) => {
+Deno.serve(async (req) => {
   const headers = setCorsHeaders(req);
 
   // OPTIONS 요청 처리

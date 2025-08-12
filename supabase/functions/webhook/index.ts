@@ -1,9 +1,9 @@
 // supabase/functions/updateTransactionStatus.js
-import { serve } from "https://deno.land/std@0.131.0/http/server.ts";
+// Deno.serve is now built-in, no import needed
 import { supabase } from "../utils/supabaseClient.ts";
 
 // Edge Function 시작
-serve(async (req) => {
+Deno.serve(async (req) => {
   try {
     // Webhook에서 JSON 데이터를 한 번만 파싱
     const { txHash, status } = await req.json();
