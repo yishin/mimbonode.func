@@ -222,7 +222,10 @@ export async function sendTransactionMessage(params) {
   }
 
   // 지갑 잔액 확인 및 알림
-  if (settings && getBnbBalance && getUsdtBalance && getXrpBalance) {
+  if (
+    settings && getBnbBalance && getUsdtBalance && getXrpBalance &&
+    getSolBalance
+  ) {
     const alertMessages = [];
 
     // 운영지갑 BNB 확인
@@ -254,19 +257,27 @@ export async function sendTransactionMessage(params) {
     }
 
     // 리플 확인
-    const xrpBalance = await getXrpBalance(settings.wallet_xrp_operation);
-    if (parseFloat(xrpBalance) < 1_000) {
-      alertMessages.push(
-        `⚠️ XRP 부족: ${parseFloat(xrpBalance).toLocaleString()}/1,000 XRP`,
-      );
+    try {
+      const xrpBalance = await getXrpBalance(settings.wallet_xrp_operation);
+      if (parseFloat(xrpBalance) < 1_000) {
+        alertMessages.push(
+          `⚠️ XRP 부족: ${parseFloat(xrpBalance).toLocaleString()}/1,000 XRP`,
+        );
+      }
+    } catch (error) {
+      console.error("❌ Error sending Telegram XRP message:", error);
     }
 
-    // 솔라나 확인
-    const solBalance = await getSolBalance(settings.wallet_sol_operation);
-    if (parseFloat(solBalance) < 30) {
-      alertMessages.push(
-        `⚠️ 솔라나 부족: ${parseFloat(solBalance).toLocaleString()}/200 SOL`,
-      );
+    try {
+      // 솔라나 확인
+      const solBalance = await getSolBalance(settings.wallet_sol_operation);
+      if (parseFloat(solBalance) < 30) {
+        alertMessages.push(
+          `⚠️ SOL 부족: ${parseFloat(solBalance).toLocaleString()}/30 SOL`,
+        );
+      }
+    } catch (error) {
+      console.error("❌ Error sending Telegram SOL message:", error);
     }
 
     // 알림 메시지가 있으면 전송

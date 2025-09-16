@@ -12,6 +12,8 @@ import {
   sendUsdt,
   setOperationWallet,
 } from "../utils/tokenUtils.ts";
+import { getXrpBalance } from "../utils/xrpUtils.ts";
+import { getSolBalance } from "../utils/solanaUtils.ts";
 import { setCorsHeaders } from "../utils/corsUtils.ts";
 import { authenticateRequest } from "../utils/authUtils.ts";
 import { sendTransactionMessage } from "../utils/telegramUtils.ts";
@@ -223,6 +225,8 @@ Deno.serve(async (req) => {
         getBnbBalance: getBnbBalance,
         getUsdtBalance: getUsdtBalance,
         getMggBalance: getMggBalance,
+        getXrpBalance: getXrpBalance,
+        getSolBalance: getSolBalance,
       });
 
       // 성공 응답
