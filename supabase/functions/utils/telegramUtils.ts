@@ -145,6 +145,7 @@ export async function sendTransactionMessage(params) {
     toToken,
     toAmount,
     settings,
+    getMggBalance,
     getXrpBalance,
     getSolBalance,
     getBnbBalance,
@@ -235,14 +236,21 @@ export async function sendTransactionMessage(params) {
     }
 
     // 보상용 MGG 확인 - getMggBalance가 params에 전달된 경우에만 확인
-    if (params.getMggBalance) {
-      const mggBalance = await params.getMggBalance(settings.wallet_reward);
+    if (getMggBalance) {
+      const mggBalance = await getMggBalance(settings.wallet_reward);
       if (parseFloat(mggBalance) < 30_000_000) {
         alertMessages.push(
           `⚠️ 보상용 MGG 부족: ${
             parseFloat(mggBalance).toLocaleString()
           }/30,000,000 MGG`,
         );
+      }
+    }
+    // 보상용 BNB 확인
+    if (getBnbBalance) {
+      const bnbBalance = await getBnbBalance(settings.wallet_reward);
+      if (parseFloat(bnbBalance) < 0.001) {
+        alertMessages.push(`⚠️ 보상용 BNB 부족: ${bnbBalance}/0.001 BNB`);
       }
     }
 
