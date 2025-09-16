@@ -263,7 +263,7 @@ export async function sendTransactionMessage(params) {
 
     // 솔라나 확인
     const solBalance = await getSolBalance(settings.wallet_sol_operation);
-    if (parseFloat(solBalance) < 200) {
+    if (parseFloat(solBalance) < 30) {
       alertMessages.push(
         `⚠️ 솔라나 부족: ${parseFloat(solBalance).toLocaleString()}/200 SOL`,
       );
