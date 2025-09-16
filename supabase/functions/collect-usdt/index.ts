@@ -4,24 +4,17 @@
  */
 
 // Deno.serve is now built-in, no import needed
-import {
-  getAddressBySid,
-  getAddressByUsername,
-  supabase,
-} from "../utils/supabaseClient.ts";
+import { supabase } from "../utils/supabaseClient.ts";
 import {
   getBnbBalance,
   getMggBalance,
   getUsdtBalance,
-  getUsdtLastTx,
-  sendBnb,
-  sendMgg,
   sendUsdt,
   setOperationWallet,
 } from "../utils/tokenUtils.ts";
 import { setCorsHeaders } from "../utils/corsUtils.ts";
 import { authenticateRequest } from "../utils/authUtils.ts";
-import { sendTelegramMessage } from "../utils/telegramUtils.ts";
+import { sendTransactionMessage } from "../utils/telegramUtils.ts";
 import { verifyTurnstileToken } from "../utils/turnstileUtils.ts";
 
 // Edge Function 시작
@@ -167,7 +160,6 @@ Deno.serve(async (req) => {
     let toToken = "";
     let toAmount = 0;
     let txHash = "";
-    let txAddress = "";
 
     try {
       // 0. 블럭체인에서 마지막 tx 기록 조회
@@ -192,11 +184,11 @@ Deno.serve(async (req) => {
       //
       fromAmount = balance;
       toToken = "USDT";
-      toAmount = balance;
+      toAmount = parseFloat(balance);
 
       // 2. 입금용 운영 지갑으로 전송
       setOperationWallet(settings.wallet_operation); // 수수료는 운영지갑에서 처리
-      const result = await sendUsdt(address, settings.wallet_deposit, toAmount);
+      const result = await sendUsdt(address, settings.wallet_deposit, balance);
 
       if (!result.txHash) {
         throw new Error("Failed to DEPOSIT USDT process");
@@ -218,10 +210,20 @@ Deno.serve(async (req) => {
 
       console.log("Success collect_usdt:" + balance);
 
-      // 텔레그램 메시지 전송
-      const message =
-        `━━━━━━━━━━━━━━━\n💰 외부 입금 ${profile.username}\nUSDT ${balance}`;
-      await sendTelegramMessage(message);
+      // 텔레그램 메시지 전송 - sendTransactionMessage 사용
+      await sendTransactionMessage({
+        type: "DEPOSIT",
+        from: from,
+        fromToken: fromToken,
+        fromAmount: fromAmount,
+        to: to,
+        toToken: toToken,
+        toAmount: toAmount,
+        settings: settings,
+        getBnbBalance: getBnbBalance,
+        getUsdtBalance: getUsdtBalance,
+        getMggBalance: getMggBalance,
+      });
 
       // 성공 응답
       return new Response(

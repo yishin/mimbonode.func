@@ -24,7 +24,7 @@ import {
 } from "../utils/exchangeUtils.ts";
 import {
   sendBlockMessage,
-  sendTelegramMessage,
+  sendTransactionMessage,
 } from "../utils/telegramUtils.ts";
 import { verifyTurnstileToken } from "../utils/turnstileUtils.ts";
 
@@ -1302,57 +1302,23 @@ Deno.serve(async (req) => {
 
         // 전송 성공 회신
         if (txHash) {
-          const typeText = type === "TRANSFER"
-            ? "🔀 내부 이체"
-            : type === "SWAP"
-            ? "🔄 스왑 "
-            : type === "WITHDRAW"
-            ? "✈️ 외부 출금"
-            : type === "DEPOSIT"
-            ? "💰 외부 입금"
-            : "ℹ️ 기타";
-
-          let message = `━━━━━━━━━━━━━━━\n${typeText}${
-            from === to ? from : ""
-          }\nFrom: ${
-            (to !== from) ? (from ? from : fromAddress) : ""
-          }\n${fromToken} ${fromAmount}\nTo: ${
-            (to !== from) ? (to ? to : toAddress) : ""
-          }\n${toToken || ""} ${toAmount || ""}`;
-
-          if (type === "WITHDRAW" && fromToken !== "MGG") {
-            // 출금에 성공하면 출금용 지갑의 잔액 조회
-            const tokenBalance = fromToken === "XRP"
-              ? await getXrpBalance("")
-              : fromToken === "SOL"
-              ? await getSolBalance("")
-              : fromToken === "BNB"
-              ? await getBnbBalance(settings.wallet_withdraw)
-              : await getUsdtBalance(settings.wallet_withdraw);
-
-            const tokenBalanceText = fromToken === "XRP"
-              ? parseFloat(tokenBalance).toLocaleString("en-US", {
-                minimumFractionDigits: 6,
-                maximumFractionDigits: 6,
-              })
-              : fromToken === "SOL"
-              ? parseFloat(tokenBalance).toLocaleString("en-US", {
-                minimumFractionDigits: 9,
-                maximumFractionDigits: 9,
-              })
-              : fromToken === "BNB"
-              ? parseFloat(tokenBalance).toLocaleString("en-US", {
-                minimumFractionDigits: 8,
-                maximumFractionDigits: 8,
-              })
-              : parseFloat(tokenBalance).toLocaleString("en-US", {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-              });
-
-            message += `\n\n> 운영 잔액: ${tokenBalanceText} ${fromToken}`;
-          }
-          await sendTelegramMessage(message);
+          await sendTransactionMessage({
+            type,
+            from,
+            fromAddress,
+            fromToken,
+            fromAmount,
+            to,
+            toAddress,
+            toToken,
+            toAmount,
+            settings,
+            getXrpBalance,
+            getSolBalance,
+            getBnbBalance,
+            getUsdtBalance,
+            getMggBalance,
+          });
 
           return new Response(
             JSON.stringify({
