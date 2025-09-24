@@ -287,13 +287,13 @@ Deno.serve(async (req) => {
 
         if (profile.feeding === false && packageCount === 0) {
           console.log("User blocked: No feeding and no packages");
-          // await blockUser(user.id, "No feeding permission and no packages");
+          await blockUser(user.id, "No feeding permission and no packages");
 
-          // return rejectRequest("temporarily suspended.");
+          return rejectRequest("temporarily suspended.");
 
           // 사용자 차단은 하지 않고 텔레그램 메시지로 알림만 보내기
           sendBlockMessage(
-            `🚫 No feeding and no packages user: ${profile.username}`,
+            `🚫 No feeding and no packages user: ${profile.username} blocked`,
           );
         }
 
