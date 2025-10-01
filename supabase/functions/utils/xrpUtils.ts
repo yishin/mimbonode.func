@@ -44,11 +44,17 @@ export async function getXrpBalance(address: any) {
     address = XRP_OPERATION_WALLET;
   }
 
-  try {
-    const endpoint = XRP_ENDPOINT;
+  const client = new Client(XRP_ENDPOINT);
 
-    const client = new Client(endpoint);
-    await client.connect();
+  try {
+    // connect() 자체가 Promise를 반환하므로 연결 완료를 보장
+    // timeout 설정으로 무한 대기 방지
+    const connectPromise = client.connect();
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Connection timeout")), 5000)
+    );
+
+    await Promise.race([connectPromise, timeoutPromise]);
 
     const accountData = await client.request({
       command: "account_info",
@@ -65,12 +71,20 @@ export async function getXrpBalance(address: any) {
 
     return balanceInXrp;
   } catch (error: any) {
+    // 에러 타입에 따른 구체적인 로깅
+    const errorType = error?.message?.includes("timeout") ? "CONNECTION_TIMEOUT" :
+                     error?.message?.includes("WebSocket") ? "WEBSOCKET_ERROR" :
+                     error?.data?.error === "actNotFound" ? "ACCOUNT_NOT_FOUND" :
+                     "UNKNOWN_ERROR";
+
     console.error("XRP balance check failed:", {
+      type: errorType,
       error: error?.message || "Unknown error",
       address,
       timestamp: new Date().toISOString(),
     });
 
+    // 계정이 없는 경우에도 0 반환 (XRP는 계정 생성 전에는 잔액 조회 불가)
     return "0";
   }
 }
@@ -133,9 +147,16 @@ export async function sendXrp(
     console.log(`Normalized amount: ${amount} -> ${normalizedAmount}`);
 
     const client = new Client(XRP_ENDPOINT);
-    await client.connect();
 
     try {
+      // connect() 자체가 Promise를 반환하므로 연결 완료를 보장
+      // timeout 설정으로 무한 대기 방지
+      const connectPromise = client.connect();
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Connection timeout")), 5000)
+      );
+
+      await Promise.race([connectPromise, timeoutPromise]);
       // 운영 지갑에서 트랜잭션 서명
       const wallet = Wallet.fromSeed(XRP_OPERATION_WALLET_SEED);
 
