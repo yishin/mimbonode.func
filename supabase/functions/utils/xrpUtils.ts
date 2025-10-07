@@ -45,48 +45,72 @@ export async function getXrpBalance(address: any) {
   }
 
   const client = new Client(XRP_ENDPOINT);
+  let retryCount = 0;
+  const maxRetries = 3;
 
-  try {
-    // connect() 자체가 Promise를 반환하므로 연결 완료를 보장
-    // timeout 설정으로 무한 대기 방지
-    const connectPromise = client.connect();
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("Connection timeout")), 5000)
-    );
+  while (retryCount < maxRetries) {
+    try {
+      // connect() 자체가 Promise를 반환하므로 연결 완료를 보장
+      // timeout 설정으로 무한 대기 방지
+      const connectPromise = client.connect();
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Connection timeout")), 10000)
+      );
 
-    await Promise.race([connectPromise, timeoutPromise]);
+      await Promise.race([connectPromise, timeoutPromise]);
 
-    const accountData = await client.request({
-      command: "account_info",
-      account: address,
-      strict: true,
-      ledger_index: "validated",
-    });
+      const accountData = await client.request({
+        command: "account_info",
+        account: address,
+        strict: true,
+        ledger_index: "validated",
+      });
 
-    await client.disconnect();
+      await client.disconnect();
 
-    // Balance는 drops 단위이므로 XRP로 변환
-    const balanceInDrops = accountData.result.account_data.Balance;
-    const balanceInXrp = (parseInt(balanceInDrops) / 1000000).toString();
+      // Balance는 drops 단위이므로 XRP로 변환
+      const balanceInDrops = accountData.result.account_data.Balance;
+      const balanceInXrp = (parseInt(balanceInDrops) / 1000000).toString();
 
-    return balanceInXrp;
-  } catch (error: any) {
-    // 에러 타입에 따른 구체적인 로깅
-    const errorType = error?.message?.includes("timeout") ? "CONNECTION_TIMEOUT" :
-                     error?.message?.includes("WebSocket") ? "WEBSOCKET_ERROR" :
-                     error?.data?.error === "actNotFound" ? "ACCOUNT_NOT_FOUND" :
-                     "UNKNOWN_ERROR";
+      console.log(`XRP balance fetched successfully: ${balanceInXrp} XRP for ${address}`);
+      return balanceInXrp;
+    } catch (error: any) {
+      retryCount++;
 
-    console.error("XRP balance check failed:", {
-      type: errorType,
-      error: error?.message || "Unknown error",
-      address,
-      timestamp: new Date().toISOString(),
-    });
+      // 마지막 시도가 아니면 재시도
+      if (retryCount < maxRetries) {
+        console.log(`XRP balance check retry ${retryCount}/${maxRetries} for ${address}`);
 
-    // 계정이 없는 경우에도 0 반환 (XRP는 계정 생성 전에는 잔액 조회 불가)
-    return "0";
+        // 연결 해제 시도
+        try {
+          await client.disconnect();
+        } catch {}
+
+        // 재시도 전 대기
+        await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+        continue;
+      }
+
+      // 에러 타입에 따른 구체적인 로깅
+      const errorType = error?.message?.includes("timeout") ? "CONNECTION_TIMEOUT" :
+                       error?.message?.includes("WebSocket") ? "WEBSOCKET_ERROR" :
+                       error?.data?.error === "actNotFound" ? "ACCOUNT_NOT_FOUND" :
+                       "UNKNOWN_ERROR";
+
+      console.error("XRP balance check failed after retries:", {
+        type: errorType,
+        error: error?.message || "Unknown error",
+        address,
+        retryCount,
+        timestamp: new Date().toISOString(),
+      });
+
+      // 계정이 없는 경우에도 0 반환 (XRP는 계정 생성 전에는 잔액 조회 불가)
+      return "0";
+    }
   }
+
+  return "0";
 }
 
 /**
