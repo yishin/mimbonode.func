@@ -541,7 +541,14 @@ Deno.serve(async (req) => {
             txHash = result.txHash;
             feeTxHash = result.feeTxHash;
           } else {
-            feeAmount = parseFloat(settings.transfer_fee_usdt);
+            // 수수료 계산: 비율 우선, 고정 금액 차선
+            if (parseFloat(settings?.transfer_fee_rate_usdt || 0) > 0) {
+              feeAmount = parseFloat(fromAmount) *
+                parseFloat(settings.transfer_fee_rate_usdt) /
+                100;
+            } else {
+              feeAmount = parseFloat(settings?.transfer_fee_usdt || 0);
+            }
             toAmount = parseFloat(fromAmount) - feeAmount;
             // usdt 전송 (DB)
             const { data, error } = await supabase.rpc("transfer_usdt", {
