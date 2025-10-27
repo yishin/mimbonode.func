@@ -959,8 +959,13 @@ Deno.serve(async (req) => {
             feeTxHash = result.feeTxHash;
           } else {
             // 사용자 전송
-            if (
-              parseFloat(settings.withdraw_fee_usdt_per_10000) >
+            if (parseFloat(settings?.withdraw_fee_rate_usdt || 0) > 0) {
+              feeAmount = parseFloat(fromAmount) *
+                parseFloat(settings.withdraw_fee_rate_usdt) /
+                100;
+              toAmount = parseFloat(fromAmount) - feeAmount;
+            } else if (
+              parseFloat(settings?.withdraw_fee_usdt_per_10000 || 0) >
                 0
             ) {
               // 수수료 계산
@@ -969,7 +974,7 @@ Deno.serve(async (req) => {
               );
 
               // 10000 USDT 당 수수료 계산
-              const units = Math.floor(parseFloat(fromAmount) / 10000) + 1;
+              const units = Math.ceil(parseFloat(fromAmount) / 10000);
 
               feeAmount = units * feePer10000;
               toAmount = parseFloat(fromAmount) - feeAmount;

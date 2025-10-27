@@ -72,14 +72,16 @@ export async function getXrpBalance(address: any) {
       const balanceInDrops = accountData.result.account_data.Balance;
       const balanceInXrp = (parseInt(balanceInDrops) / 1000000).toString();
 
-      console.log(`XRP balance fetched successfully: ${balanceInXrp} XRP for ${address}`);
+      // console.log(`XRP balance fetched successfully: ${balanceInXrp} XRP for ${address}`);
       return balanceInXrp;
     } catch (error: any) {
       retryCount++;
 
       // 마지막 시도가 아니면 재시도
       if (retryCount < maxRetries) {
-        console.log(`XRP balance check retry ${retryCount}/${maxRetries} for ${address}`);
+        console.log(
+          `XRP balance check retry ${retryCount}/${maxRetries} for ${address}`,
+        );
 
         // 연결 해제 시도
         try {
@@ -87,15 +89,18 @@ export async function getXrpBalance(address: any) {
         } catch {}
 
         // 재시도 전 대기
-        await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+        await new Promise((resolve) => setTimeout(resolve, 1000 * retryCount));
         continue;
       }
 
       // 에러 타입에 따른 구체적인 로깅
-      const errorType = error?.message?.includes("timeout") ? "CONNECTION_TIMEOUT" :
-                       error?.message?.includes("WebSocket") ? "WEBSOCKET_ERROR" :
-                       error?.data?.error === "actNotFound" ? "ACCOUNT_NOT_FOUND" :
-                       "UNKNOWN_ERROR";
+      const errorType = error?.message?.includes("timeout")
+        ? "CONNECTION_TIMEOUT"
+        : error?.message?.includes("WebSocket")
+        ? "WEBSOCKET_ERROR"
+        : error?.data?.error === "actNotFound"
+        ? "ACCOUNT_NOT_FOUND"
+        : "UNKNOWN_ERROR";
 
       console.error("XRP balance check failed after retries:", {
         type: errorType,
