@@ -245,13 +245,13 @@ async function generateAndSendReport() {
       (sum: number, item: PackageSalesItem) => sum + (Number(item.price) || 0),
       0,
     );
-    const dailyFeeAmount = (dailyTotal - dailySalesTotal) * 0.03; // 3% 수수료
+    const dailyFeeAmount = (dailyTotal - dailySalesTotal) * 0.02; // 3% 수수료
 
     const monthlyTotal = (monthlyData as PackageSalesItem[]).reduce(
       (sum: number, item: PackageSalesItem) => sum + (Number(item.price) || 0),
       0,
     );
-    const monthlyFeeAmount = (monthlyTotal - monthlySalesTotal) * 0.03; // 3% 수수료
+    const monthlyFeeAmount = (monthlyTotal - monthlySalesTotal) * 0.02; // 2% 수수료
 
     // 메시지 생성 (날짜를 한국 시간으로 표시)
     const message = `
@@ -265,7 +265,7 @@ async function generateAndSendReport() {
       (dailySalesData as SalesItem[])?.length || 0
     }건)
 실 판매: ${(dailyTotal - dailySalesTotal).toLocaleString()} USDT
-정산(3%): ${dailyFeeAmount.toLocaleString()} USDT
+정산(2%): ${dailyFeeAmount.toLocaleString()} USDT
 
 <b>2. 월별 판매 현황</b>
 (${monthlyPeriodTitle})
@@ -273,7 +273,7 @@ async function generateAndSendReport() {
 총 판매액: ${monthlyTotal.toLocaleString()} USDT
 총 영업지원: ${monthlySalesTotal.toLocaleString()} USDT
 총 실 판매: ${(monthlyTotal - monthlySalesTotal).toLocaleString()} USDT
-총 정산(3%): ${monthlyFeeAmount.toLocaleString()} USDT
+총 정산(2%): ${monthlyFeeAmount.toLocaleString()} USDT
 `;
 
     // 텔레그램으로 전송
