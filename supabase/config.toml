@@ -261,6 +261,10 @@ inspector_port = 8083
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/MY_FUNCTION_NAME/*.html" ]
 
+# Webhook 함수 JWT 검증 비활성화
+[functions.webhook]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327

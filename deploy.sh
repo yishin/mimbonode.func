@@ -17,11 +17,18 @@ fi
 # 함수 배포 및 결과 확인 함수
 deploy_function() {
   local func_name="$1"
-  if supabase functions deploy "$func_name" --project-ref $PROJECT_REF; then
-    echo ">>> $func_name 함수를 $1 에 배포 완료했습니다."
+  local extra_args="$2"
+
+  # webhook 함수는 JWT 검증 비활성화
+  if [ "$func_name" == "webhook" ]; then
+    extra_args="--no-verify-jwt"
+  fi
+
+  if supabase functions deploy "$func_name" --project-ref $PROJECT_REF $extra_args; then
+    echo ">>> $func_name 함수를 $ENV 에 배포 완료했습니다. $extra_args"
     return 0
   else
-    echo ">>>$func_name 함수를 $1 에 배포 중 오류가 발생했습니다."
+    echo ">>>$func_name 함수를 $ENV 에 배포 중 오류가 발생했습니다."
     return 1
   fi
 }
@@ -29,7 +36,7 @@ deploy_function() {
 # 함수명이 있는지 확인
 if [ -n "$2" ]; then
   # 함수명이 있는 경우 해당 함수만 배포
-  deploy_function "$2" "$3"
+  deploy_function "$2"
 else
   # 함수명이 없으면 모든 함수 배포
   all_success=true
