@@ -37,6 +37,21 @@ async function sendTelegramMessage(message: string) {
   }
 }
 
+async function blockUser(userId: string, reason: string) {
+  const { data: userData, error: userError } = await supabase
+    .from("profiles")
+    .update({ is_block: true, block_reason: reason })
+    .eq("user_id", userId)
+    .select("username")
+    .single();
+
+  if (userError) {
+    console.error("Error blocking user:", userError);
+    return;
+  }
+
+  return userData;
+}
 // Wei to Ether 변환 함수 (18 decimals)
 function fromWei(value: string | bigint, decimals: number = 18): string {
   try {
@@ -140,7 +155,7 @@ Deno.serve(async (req) => {
     }
 
     console.log(
-      "Webhook request received - Method:",
+      "> Webhook request received - Method:",
       req.method,
       "URL:",
       req.url,
@@ -153,11 +168,6 @@ Deno.serve(async (req) => {
     //   console.log(`Header [${key}]: ${value}`);
     // });
     // console.log("=== End Headers ===");
-
-    // URL 파라미터 확인
-    const url = new URL(req.url);
-
-    console.log("url:", url.href || url.toString());
 
     // const token = url.searchParams.get("token");
     // console.log("token:", token);
@@ -225,6 +235,11 @@ Deno.serve(async (req) => {
 
     // 각 transfer 이벤트에 대해 처리
     for (const transfer of transfers) {
+      if (transfer.amountWei === "0") {
+        console.log("Skipping transfer with amount 0");
+        continue;
+      }
+
       console.log("Processing transfer:", {
         from: transfer.from,
         to: transfer.to,
@@ -248,14 +263,15 @@ Deno.serve(async (req) => {
       // wallets 테이블에서 to 주소 확인 (대소문자 무시)
       const { data: toWallet } = await supabase
         .from("wallets")
-        .select("address, user_id, username, memo")
+        .select("address, user_id, username, memo, sid")
         .ilike("address", transfer.to) // ilike로 대소문자 무시 비교
         .single();
+      console.log("toWallet:", JSON.stringify(toWallet));
 
       // from 주소가 wallets에 없고, to 주소가 wallets에 있는 경우 (외부에서 내부로 전송)
-      if (!fromWallet && toWallet) {
+      if (!fromWallet && toWallet && toWallet.sid > 1000) {
         console.log(
-          `>>> External transfer detected from ${transfer.from} to ${transfer.to} (${toWallet.username})`,
+          `>>> External transfer detected from ${transfer.from} to ${toWallet.username} (${transfer.to})`,
         );
 
         // 외부에서 내부로의 전송만 DB에 저장
@@ -290,14 +306,25 @@ Deno.serve(async (req) => {
           console.error("Error logging external transfer:", logError);
         }
 
+        // 사용자 차단
+        const blockedUser = await blockUser(
+          toWallet.user_id,
+          "Unauthorized transfer to internal wallet",
+        );
+
+        if (blockedUser) {
+          console.log("User blocked:", blockedUser.username);
+        }
+
         // 텔레그램 알림 전송
         const telegramMessage = `
 🚨 <b>외부 MGG 전송 감지</b>
 
 <b>From:</b> <code>${transfer.from}</code>
-<b>To:</b> ${toWallet.username} (<code>${transfer.to}</code>)
+<b>To:</b> ${toWallet.username || toWallet.memo} (<code>${transfer.to}</code>)
+${blockedUser ? `<b>Blocked:</b> ${blockedUser.username}` : ""}
 <b>Amount:</b> ${transfer.amount} MGG
-<b>Block:</b> ${transfer.blockNumber}
+<b>TxBlock:</b> ${transfer.blockNumber}
 <b>TxHash:</b> <code>${transfer.transactionHash}</code>
 
 <a href="https://bscscan.com/tx/${transfer.transactionHash}">View on BSCScan</a>
@@ -324,6 +351,25 @@ Deno.serve(async (req) => {
             fromWallet.username || fromWallet.memo
           } to ${toWallet.username || toWallet.memo} - skipping DB save`,
         );
+
+        // 텔레그램 알림 전송
+        // const telegramMessage = `
+        //         🚨 <b>내부 MGG 전송 감지</b>
+
+        //         <b>From:</b> <code>${
+        //   fromWallet.username || fromWallet.memo
+        // }</code>
+        //         <b>To:</b> ${
+        //   toWallet.username || toWallet.memo
+        // } (<code>${transfer.to}</code>)
+        //         <b>Amount:</b> ${transfer.amount} MGG
+        //         <b>Block:</b> ${transfer.blockNumber}
+        //         <b>TxHash:</b> <code>${transfer.transactionHash}</code>
+
+        //         <a href="https://bscscan.com/tx/${transfer.transactionHash}">View on BSCScan</a>
+        //                 `.trim();
+
+        // await sendTelegramMessage(telegramMessage);
       } else if (fromWallet && !toWallet) {
         console.log(
           `>>> Internal to external transfer from ${
@@ -332,7 +378,9 @@ Deno.serve(async (req) => {
         );
       } else {
         console.log(
-          `>>> External to external transfer - skipping DB save`,
+          `>>> External to external transfer - skipping DB save ${
+            JSON.stringify(transfer)
+          }`,
         );
       }
     }
