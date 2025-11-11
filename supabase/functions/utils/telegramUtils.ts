@@ -182,27 +182,30 @@ export async function sendTransactionMessage(params) {
       ? await getBnbBalance(settings.wallet_withdraw)
       : await getUsdtBalance(settings.wallet_withdraw);
 
-    const tokenBalanceText = fromToken === "XRP"
-      ? parseFloat(tokenBalance).toLocaleString("en-US", {
-        minimumFractionDigits: 6,
-        maximumFractionDigits: 6,
-      })
-      : fromToken === "SOL"
-      ? parseFloat(tokenBalance).toLocaleString("en-US", {
-        minimumFractionDigits: 9,
-        maximumFractionDigits: 9,
-      })
-      : fromToken === "BNB"
-      ? parseFloat(tokenBalance).toLocaleString("en-US", {
-        minimumFractionDigits: 8,
-        maximumFractionDigits: 8,
-      })
-      : parseFloat(tokenBalance).toLocaleString("en-US", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      });
+    // 잔액 조회 실패 시 메시지에 표시하지 않음
+    if (tokenBalance !== null && tokenBalance !== undefined) {
+      const tokenBalanceText = fromToken === "XRP"
+        ? parseFloat(tokenBalance).toLocaleString("en-US", {
+          minimumFractionDigits: 6,
+          maximumFractionDigits: 6,
+        })
+        : fromToken === "SOL"
+        ? parseFloat(tokenBalance).toLocaleString("en-US", {
+          minimumFractionDigits: 9,
+          maximumFractionDigits: 9,
+        })
+        : fromToken === "BNB"
+        ? parseFloat(tokenBalance).toLocaleString("en-US", {
+          minimumFractionDigits: 8,
+          maximumFractionDigits: 8,
+        })
+        : parseFloat(tokenBalance).toLocaleString("en-US", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        });
 
-    message += `\n\n> 운영 잔액: ${tokenBalanceText} ${fromToken}`;
+      message += `\n\n> 운영 잔액: ${tokenBalanceText} ${fromToken}`;
+    }
   }
 
   // DEPOSIT일 때 총 입금액 추가
@@ -279,7 +282,8 @@ export async function sendTransactionMessage(params) {
     try {
       // 솔라나 확인
       const solBalance = await getSolBalance(settings.wallet_sol_operation);
-      if (parseFloat(solBalance) < 30) {
+      // 잔액 조회 실패(null)인 경우는 알림을 보내지 않음
+      if (solBalance !== null && parseFloat(solBalance) < 30) {
         alertMessages.push(
           `⚠️ SOL 부족: ${parseFloat(solBalance).toLocaleString()}/30 SOL`,
         );

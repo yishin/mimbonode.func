@@ -103,7 +103,8 @@ export async function getSolBalance(address?: string) {
       timestamp: new Date().toISOString(),
     });
 
-    return "0";
+    // 에러 발생 시 null 반환하여 에러와 실제 잔액 부족을 구분
+    return null;
   }
 }
 

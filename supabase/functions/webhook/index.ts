@@ -256,20 +256,26 @@ Deno.serve(async (req) => {
       // wallets 테이블에서 from 주소 확인 (대소문자 무시)
       const { data: fromWallet } = await supabase
         .from("wallets")
-        .select("address, user_id, username, memo")
+        .select("address, user_id, username, memo, sid")
         .ilike("address", transfer.from) // ilike로 대소문자 무시 비교
-        .single();
+        .maybeSingle();
+      console.log("fromWallet:", JSON.stringify(fromWallet));
 
       // wallets 테이블에서 to 주소 확인 (대소문자 무시)
       const { data: toWallet } = await supabase
         .from("wallets")
         .select("address, user_id, username, memo, sid")
         .ilike("address", transfer.to) // ilike로 대소문자 무시 비교
-        .single();
+        .maybeSingle();
       console.log("toWallet:", JSON.stringify(toWallet));
 
       // from 주소가 wallets에 없고, to 주소가 wallets에 있는 경우 (외부에서 내부로 전송)
-      if (!fromWallet && toWallet && toWallet.sid > 1000) {
+      if (!fromWallet && toWallet) {
+        if (toWallet.sid <= 1000) {
+          console.log("Skipping transfer to operation wallet");
+          continue;
+        }
+
         console.log(
           `>>> External transfer detected from ${transfer.from} to ${toWallet.username} (${transfer.to})`,
         );

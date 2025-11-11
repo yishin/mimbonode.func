@@ -1200,6 +1200,13 @@ Deno.serve(async (req) => {
           }
         } else if (fromToken === "SOL") {
           const solBalance = await getSolBalance(""); // 출금 지갑의 SOL 잔액 확인
+          if (solBalance === null) {
+            // 잔액 조회 실패 시 에러 반환
+            return new Response(
+              JSON.stringify({ error: "Failed to check SOL balance" }),
+              { status: 500, headers },
+            );
+          }
           if (parseFloat(fromAmount) > parseFloat(solBalance)) {
             return new Response(
               JSON.stringify({ error: "Insufficient balance" }),
