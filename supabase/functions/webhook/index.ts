@@ -253,21 +253,39 @@ Deno.serve(async (req) => {
         continue;
       }
 
+      // 보상용 지갑 예외처리: 간혹 통보되는 문제로 인해 예외처리
+      const lowerFrom = transfer?.from?.toLowerCase();
+      if (
+        lowerFrom === "0x376aff525346179265b233b09880e349e1cf40e2" ||
+        lowerFrom === "0x8cdf0232f3ce26b73adcbf9edaf5cfc0a2f5d967" ||
+        lowerFrom === "0x6ba18ffd9b55210787713b6458ad22768534d8f3" ||
+        lowerFrom === "0x101ae210462ed212accc7e1d5ee7ed3026f870e0"
+      ) {
+        console.log("보상용 지갑에서 전송됨 - skipping DB save");
+        continue;
+      }
+
       // wallets 테이블에서 from 주소 확인 (대소문자 무시)
-      const { data: fromWallet } = await supabase
+      const { data: fromWallet, error: fromError } = await supabase
         .from("wallets")
         .select("address, user_id, username, memo, sid")
         .ilike("address", transfer.from) // ilike로 대소문자 무시 비교
         .maybeSingle();
-      console.log("fromWallet:", JSON.stringify(fromWallet));
+      console.log("fromWallet query:", transfer.from);
+      console.log("fromWallet result:", JSON.stringify(fromWallet));
+      if (fromError) {
+        console.log("fromWallet error:", JSON.stringify(fromError));
+      }
 
       // wallets 테이블에서 to 주소 확인 (대소문자 무시)
-      const { data: toWallet } = await supabase
+      const { data: toWallet, error: toError } = await supabase
         .from("wallets")
         .select("address, user_id, username, memo, sid")
         .ilike("address", transfer.to) // ilike로 대소문자 무시 비교
         .maybeSingle();
-      console.log("toWallet:", JSON.stringify(toWallet));
+      console.log("toWallet query:", transfer.to);
+      console.log("toWallet result:", JSON.stringify(toWallet));
+      if (toError) console.log("toWallet error:", JSON.stringify(toError));
 
       // from 주소가 wallets에 없고, to 주소가 wallets에 있는 경우 (외부에서 내부로 전송)
       if (!fromWallet && toWallet) {
