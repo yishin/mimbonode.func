@@ -110,12 +110,12 @@ export async function getXrpBalance(address: any) {
         timestamp: new Date().toISOString(),
       });
 
-      // 계정이 없는 경우에도 0 반환 (XRP는 계정 생성 전에는 잔액 조회 불가)
-      return "0";
+      // 잔액 조회 실패 시 -1 반환
+      return "-1";
     }
   }
 
-  return "0";
+  return "-1";
 }
 
 /**
