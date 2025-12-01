@@ -543,13 +543,28 @@ Deno.serve(async (req) => {
           } else {
             // 수수료 계산: 비율 우선, 고정 금액 차선
             if (parseFloat(settings?.transfer_fee_rate_usdt || 0) > 0) {
-              feeAmount = parseFloat(fromAmount) *
-                parseFloat(settings.transfer_fee_rate_usdt) /
-                100;
+              // 비율 수수료: toAmount 기준 (Exclusive)
+              // fromAmount = toAmount + fee
+              // fee = toAmount * rate / 100
+              // fromAmount = toAmount * (1 + rate/100)
+              // toAmount = fromAmount / (1 + rate/100)
+              const rate = parseFloat(settings.transfer_fee_rate_usdt);
+              toAmount = parseFloat(fromAmount) / (1 + rate / 100);
+              feeAmount = parseFloat(fromAmount) - toAmount;
             } else {
+              // 고정 수수료: fromAmount 기준 (Inclusive)
               feeAmount = parseFloat(settings?.transfer_fee_usdt || 0);
+              toAmount = parseFloat(fromAmount) - feeAmount;
             }
-            toAmount = parseFloat(fromAmount) - feeAmount;
+
+            // toAmount 검증
+            if (
+              toAmountOrg &&
+              Math.abs(parseFloat(toAmountOrg) - toAmount) > 0.000001
+            ) {
+              return rejectRequest("Amount mismatch");
+            }
+
             // usdt 전송 (DB)
             const { data, error } = await supabase.rpc("transfer_usdt", {
               from_user: from,
@@ -569,9 +584,24 @@ Deno.serve(async (req) => {
             }
           }
         } else if (fromToken === "MGG") {
-          feeAmount = fromAmount * settings.transfer_fee_rate_mgg /
-            100;
-          toAmount = fromAmount - feeAmount;
+          if (parseFloat(settings?.transfer_fee_rate_mgg || 0) > 0) {
+            // 비율 수수료: toAmount 기준 (Exclusive)
+            const rate = parseFloat(settings.transfer_fee_rate_mgg);
+            toAmount = parseFloat(fromAmount) / (1 + rate / 100);
+            feeAmount = parseFloat(fromAmount) - toAmount;
+          } else {
+            // 고정 수수료: fromAmount 기준 (Inclusive)
+            feeAmount = parseFloat(settings?.transfer_fee_mgg || 0);
+            toAmount = fromAmount - feeAmount;
+          }
+
+          // toAmount 검증
+          if (
+            toAmountOrg &&
+            Math.abs(parseFloat(toAmountOrg) - toAmount) > 0.000001
+          ) {
+            return rejectRequest("Amount mismatch");
+          }
 
           if (isAdmin && adminPage) {
             // 관리자 전송
@@ -590,7 +620,6 @@ Deno.serve(async (req) => {
             );
             if (feeResult) {
               feeTxHash = feeResult.txHash;
-              feeAmount = feeAmount;
             }
           }
         } else if (fromToken === "BNB") {
@@ -966,11 +995,11 @@ Deno.serve(async (req) => {
             feeTxHash = result.feeTxHash;
           } else {
             // 사용자 전송
+
             if (parseFloat(settings?.withdraw_fee_rate_usdt || 0) > 0) {
-              feeAmount = parseFloat(fromAmount) *
-                parseFloat(settings.withdraw_fee_rate_usdt) /
-                100;
-              toAmount = parseFloat(fromAmount) - feeAmount;
+              const rate = parseFloat(settings.withdraw_fee_rate_usdt);
+              toAmount = parseFloat(fromAmount) / (1 + rate / 100);
+              feeAmount = parseFloat(fromAmount) - toAmount;
             } else if (
               parseFloat(settings?.withdraw_fee_usdt_per_10000 || 0) >
                 0
@@ -989,6 +1018,14 @@ Deno.serve(async (req) => {
               // 수수료 없음
               feeAmount = 0;
               toAmount = fromAmount;
+            }
+
+            // toAmount 검증
+            if (
+              toAmountOrg &&
+              Math.abs(parseFloat(toAmountOrg) - toAmount) > 0.000001
+            ) {
+              return rejectRequest("Amount mismatch");
             }
             // USDT 출금 처리 : 출금 지갑에서 수수료를 제외한 금액의 USDT를 출금한다.
             // DB에서 사용자의 USDT 잔액에서 출금 금액의 USDT를 차감한다.
@@ -1009,7 +1046,7 @@ Deno.serve(async (req) => {
             const result = await sendUsdt(
               settings.wallet_withdraw,
               toAddress,
-              toAmount,
+              toAmount.toString(),
             );
             if (result.success) {
               txHash = result.txHash;
@@ -1038,16 +1075,27 @@ Deno.serve(async (req) => {
             txHash = result.txHash;
             feeTxHash = result.feeTxHash;
           } else {
-            if (parseFloat(settings.withdraw_fee_rate_mgg) > 0) {
-              feeAmount = parseFloat(fromAmount) *
-                parseFloat(settings.withdraw_fee_rate_mgg) /
-                100;
-              toAmount = parseFloat(fromAmount) - feeAmount;
+            if (parseFloat(settings?.withdraw_fee_rate_mgg || 0) > 0) {
+              const rate = parseFloat(settings.withdraw_fee_rate_mgg);
+              toAmount = parseFloat(fromAmount) / (1 + rate / 100);
+              feeAmount = parseFloat(fromAmount) - toAmount;
             } else {
               feeAmount = 0;
               toAmount = fromAmount;
             }
-            const result = await sendMgg(fromAddress, toAddress, toAmount);
+
+            // toAmount 검증
+            if (
+              toAmountOrg &&
+              Math.abs(parseFloat(toAmountOrg) - toAmount) > 0.000001
+            ) {
+              return rejectRequest("Amount mismatch");
+            }
+            const result = await sendMgg(
+              fromAddress,
+              toAddress,
+              toAmount.toString(),
+            );
             txHash = result.txHash;
 
             // mgg fee 출금처리
@@ -1055,7 +1103,7 @@ Deno.serve(async (req) => {
               const resultFee = await sendMgg(
                 fromAddress,
                 settings.wallet_fee,
-                feeAmount,
+                feeAmount.toString(),
               );
               feeTxHash = resultFee.txHash;
             }
@@ -1069,18 +1117,22 @@ Deno.serve(async (req) => {
             feeTxHash = result.feeTxHash;
           } else {
             // 사용자 전송
-            if (
-              parseFloat(settings.withdraw_fee_rate_bnb) >
-                0
-            ) {
-              feeAmount = parseFloat(fromAmount) *
-                parseFloat(settings.withdraw_fee_rate_bnb) /
-                100;
-              toAmount = parseFloat(fromAmount) - feeAmount;
+            if (parseFloat(settings?.withdraw_fee_rate_bnb || 0) > 0) {
+              const rate = parseFloat(settings.withdraw_fee_rate_bnb);
+              toAmount = parseFloat(fromAmount) / (1 + rate / 100);
+              feeAmount = parseFloat(fromAmount) - toAmount;
             } else {
               // 수수료 없음
               feeAmount = 0;
               toAmount = fromAmount;
+            }
+
+            // toAmount 검증
+            if (
+              toAmountOrg &&
+              Math.abs(parseFloat(toAmountOrg) - toAmount) > 0.000001
+            ) {
+              return rejectRequest("Amount mismatch");
             }
             // BNB 출금 처리 : 출금 지갑에서 수수료를 제외한 금액의 BNB를 출금한다.
             // DB에서 사용자의 BNB 잔액에서 출금 금액의 BNB를 차감한다.
@@ -1101,7 +1153,7 @@ Deno.serve(async (req) => {
             const result = await sendBnb(
               settings.wallet_withdraw,
               toAddress,
-              toAmount,
+              toAmount.toString(),
             );
             if (result.success) {
               txHash = result.txHash;
@@ -1144,18 +1196,22 @@ Deno.serve(async (req) => {
             feeTxHash = result.feeTxHash;
           } else {
             // 사용자 전송
-            if (
-              parseFloat(settings.withdraw_fee_rate_xrp) >
-                0
-            ) {
-              feeAmount = parseFloat(fromAmount) *
-                parseFloat(settings.withdraw_fee_rate_xrp) /
-                100;
-              toAmount = parseFloat(fromAmount) - feeAmount;
+            if (parseFloat(settings?.withdraw_fee_rate_xrp || 0) > 0) {
+              const rate = parseFloat(settings.withdraw_fee_rate_xrp);
+              toAmount = parseFloat(fromAmount) / (1 + rate / 100);
+              feeAmount = parseFloat(fromAmount) - toAmount;
             } else {
               // 수수료 없음
               feeAmount = 0;
               toAmount = fromAmount;
+            }
+
+            // toAmount 검증
+            if (
+              toAmountOrg &&
+              Math.abs(parseFloat(toAmountOrg) - toAmount) > 0.000001
+            ) {
+              return rejectRequest("Amount mismatch");
             }
             // XRP 출금 처리 : 출금 지갑에서 수수료를 제외한 금액의 XRP를 출금한다.
             // DB에서 사용자의 XRP 잔액에서 출금 금액의 XRP를 차감한다.
@@ -1176,7 +1232,7 @@ Deno.serve(async (req) => {
             const result = await sendXrp(
               "",
               toAddress,
-              toAmount,
+              toAmount.toString(),
               destinationTag,
             );
             if (result.success) {
@@ -1222,18 +1278,22 @@ Deno.serve(async (req) => {
             feeTxHash = result.feeTxHash;
           } else {
             // 사용자 전송
-            if (
-              parseFloat(settings.withdraw_fee_rate_sol) >
-                0
-            ) {
-              feeAmount = parseFloat(fromAmount) *
-                parseFloat(settings.withdraw_fee_rate_sol) /
-                100;
-              toAmount = parseFloat(fromAmount) - feeAmount;
+            if (parseFloat(settings?.withdraw_fee_rate_sol || 0) > 0) {
+              const rate = parseFloat(settings.withdraw_fee_rate_sol);
+              toAmount = parseFloat(fromAmount) / (1 + rate / 100);
+              feeAmount = parseFloat(fromAmount) - toAmount;
             } else {
               // 수수료 없음
               feeAmount = 0;
               toAmount = fromAmount;
+            }
+
+            // toAmount 검증
+            if (
+              toAmountOrg &&
+              Math.abs(parseFloat(toAmountOrg) - toAmount) > 0.000001
+            ) {
+              return rejectRequest("Amount mismatch");
             }
             // SOL 출금 처리 : 출금 지갑에서 수수료를 제외한 금액의 SOL를 출금한다.
             // DB에서 사용자의 SOL 잔액에서 출금 금액의 SOL를 차감한다.
@@ -1253,7 +1313,7 @@ Deno.serve(async (req) => {
             // 토큰을 전송한다.
             const result = await sendSol(
               toAddress,
-              toAmount,
+              toAmount.toString(),
             );
             if (result.success) {
               txHash = result.txHash;

@@ -270,7 +270,7 @@ export async function sendTransactionMessage(params) {
     // 리플 확인
     try {
       const xrpBalance = await getXrpBalance(settings.wallet_xrp_operation);
-      if (parseFloat(xrpBalance) < 1_000) {
+      if (parseInt(xrpBalance) !== -1 && parseFloat(xrpBalance) < 1_000) {
         alertMessages.push(
           `⚠️ XRP 부족: ${parseFloat(xrpBalance).toLocaleString()}/1,000 XRP`,
         );
