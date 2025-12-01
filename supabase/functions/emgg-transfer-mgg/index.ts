@@ -88,13 +88,65 @@ Deno.serve(async (req) => {
     const settings = await getSettings();
     setOperationWallet(settings.wallet_operation);
 
-    // from 주소가 emgg_wallet_address와 일치하는지 검증
-    if (!settings.emgg_wallet_address) {
-      throw new Error("eMGG wallet address not configured in settings");
+    const normalizeAddresses = (raw: unknown): string[] => {
+      if (!raw) {
+        return [];
+      }
+
+      if (Array.isArray(raw)) {
+        return raw
+          .filter((addr): addr is string => typeof addr === "string")
+          .map((addr) => addr.trim().toLowerCase())
+          .filter((addr) => addr.length > 0);
+      }
+
+      if (typeof raw === "string") {
+        const trimmed = raw.trim();
+        if (!trimmed) {
+          return [];
+        }
+
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (Array.isArray(parsed)) {
+            return parsed
+              .filter((addr): addr is string => typeof addr === "string")
+              .map((addr) => addr.trim().toLowerCase())
+              .filter((addr) => addr.length > 0);
+          }
+        } catch (_err) {
+          // 문자열이 JSON이 아니면 계속 진행
+        }
+
+        return trimmed
+          .split(",")
+          .map((addr) => addr.trim().toLowerCase())
+          .filter((addr) => addr.length > 0);
+      }
+
+      return [];
+    };
+
+    const allowedAddresses = [
+      ...normalizeAddresses(settings.emgg_wallet_address),
+      ...normalizeAddresses(settings.staking_fund_address),
+      ...normalizeAddresses(settings.staking_flex_address),
+      ...normalizeAddresses(settings.staking_fixed_3_address),
+      ...normalizeAddresses(settings.staking_fixed_6_address),
+      ...normalizeAddresses(settings.staking_fixed_9_address),
+      ...normalizeAddresses(settings.staking_fixed_12_address)
+    ];
+
+    if (allowedAddresses.length === 0) {
+      throw new Error(
+        "No authorized eMGG/staking wallet addresses configured in settings",
+      );
     }
 
-    if (from.toLowerCase() !== settings.emgg_wallet_address.toLowerCase()) {
-      throw new Error("Unauthorized: from address does not match configured eMGG wallet address");
+    if (!allowedAddresses.includes(from.toLowerCase())) {
+      throw new Error(
+        "Unauthorized: from address does not match configured eMGG/staking wallet addresses",
+      );
     }
 
     // 전송 금액이 최대 허용 금액을 초과하는지 검증
