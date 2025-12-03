@@ -1041,6 +1041,10 @@ Deno.serve(async (req) => {
                 "Error updating USDT balance:",
                 updateUsdtBalanceError,
               );
+              return rejectRequest("Failed to update wallet");
+            }
+            if (!updateUsdtBalance) {
+              return rejectRequest("Insufficient USDT balance");
             }
             // 토큰을 전송한다.
             const result = await sendUsdt(
@@ -1148,6 +1152,10 @@ Deno.serve(async (req) => {
                 "Error updating BNB balance:",
                 updateBnbBalanceError,
               );
+              return rejectRequest("Failed to update wallet");
+            }
+            if (!updateBnbBalance) {
+              return rejectRequest("Insufficient BNB balance");
             }
             // 토큰을 전송한다.
             const result = await sendBnb(
@@ -1227,6 +1235,10 @@ Deno.serve(async (req) => {
                 "Error updating XRP balance:",
                 updateXrpBalanceError,
               );
+              return rejectRequest("Failed to update wallet");
+            }
+            if (!updateXrpBalance) {
+              return rejectRequest("Insufficient XRP balance");
             }
             // 토큰을 전송한다.
             const result = await sendXrp(
@@ -1309,6 +1321,10 @@ Deno.serve(async (req) => {
                 "Error updating SOL balance:",
                 updateSolBalanceError,
               );
+              return rejectRequest("Failed to update wallet");
+            }
+            if (!updateSolBalance) {
+              return rejectRequest("Insufficient SOL balance");
             }
             // 토큰을 전송한다.
             const result = await sendSol(
